@@ -215,7 +215,7 @@ def make_tileable(a: np.ndarray) -> np.ndarray:
     return np.concatenate([a, a[:, ::-1]], axis=1)
 
 
-def far_bg(src: str, name: str, h=1080, far=True, far_blur=3.2):
+def far_bg(src: str, name: str, h=1080, far=True, far_blur=4.5):
     """Far background: ONE picture, never repeated (repeating doubled the sun and the big castle).
     The game scales it a little wider than the screen and pans across it once over the whole level."""
     path = SRC / src
@@ -229,7 +229,7 @@ def far_bg(src: str, name: str, h=1080, far=True, far_blur=3.2):
         img = img.filter(ImageFilter.GaussianBlur(far_blur))
         img = ImageEnhance.Color(img).enhance(0.85)
         haze = Image.new('RGB', img.size, tuple(int(c) for c in np.asarray(img)[: h // 5].reshape(-1, 3).mean(0)))
-        img = Image.blend(img, haze, 0.14)
+        img = Image.blend(img, haze, 0.2)
     save(img, name, jpg=True)
 
 
@@ -290,6 +290,10 @@ for b in ['meadow', 'forest', 'river', 'cave', 'castle']:
 # foreground: soft focus, it passes right in front of the camera
 sheet('fg-nature.png', ['fg-grass', 'fg-leaves', 'fg-fern', 'fg-bush'], ref_h=260, same_scale=False, blur=3.5)
 sheet('fg-dark.png', ['fg-rock', 'fg-stalagmite', 'fg-pillar', 'fg-thorns'], ref_h=260, same_scale=False, blur=3.5)
+# underwater life
+sheet('fairy-fish.png', ['ffish1', 'ffish2', 'ffish3', 'ffish4', 'ffish5', 'ffish6'], ref_h=110, same_scale=False)
+sheet('water-plants.png', ['wplant1', 'wplant2', 'wplant3', 'wplant4', 'wplant5', 'wplant6'], ref_h=220, same_scale=False)
+seamless_layer('riverbed.png', 'riverbed', blur=0)
 # painted interface
 single('ui-button.png', 'ui-button', 140)
 single('ui-panel.png', 'ui-panel', 420)

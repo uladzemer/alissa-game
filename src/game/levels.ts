@@ -121,7 +121,6 @@ function river(): string[] {
 
 function cave(): string[] {
   const m = new MapBuilder(152, 12);
-  m.row(0, 151, 0, '#');
   m.ground(0, 20, 10).set(6, 9, '@').set(12, 5, 'b').stars(6, 10, 8);
   m.set(23, 8, 'M').set(27, 7, 'M').stars(23, 27, 4);
   m.ground(31, 50, 10).set(33, 9, 'P').row(40, 41, 9, '^').set(45, 4, 'b').set(48, 9, 'm').stars(39, 42, 6);
@@ -147,8 +146,8 @@ function castle(): string[] {
 }
 
 export const LEVELS: LevelDef[] = [
-  { index: 0, world: 'meadow', name: 'Солнечная опушка', goal: 'Найди первый кристалл!', ground: 'grass', map: meadow() },
-  { index: 1, world: 'forest', name: 'Сумрачный лес', goal: 'Лазай по деревьям, кристалл на макушке!', ground: 'grass', map: forest() },
+  { index: 0, world: 'meadow', name: 'Солнечная опушка', goal: 'Найди первый волшебный ключик!', ground: 'grass', map: meadow() },
+  { index: 1, world: 'forest', name: 'Сумрачный лес', goal: 'Лазай по деревьям, ключик на макушке!', ground: 'grass', map: forest() },
   { index: 2, world: 'river', name: 'Речка и переправы', goal: 'Не упади в воду!', ground: 'grass', map: river() },
   { index: 3, world: 'cave', name: 'Пещера светлячков', goal: 'Берегись летучих мышей!', ground: 'rock', map: cave() },
   { index: 4, world: 'castle', name: 'Замок колдуньи', goal: 'Расколдуй колдунью и спаси принца!', ground: 'stone', map: castle() },

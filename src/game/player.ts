@@ -161,8 +161,12 @@ export class Player {
     else if (now < this.shootAnimUntil) key = 'alice-shoot';
     else if (!this.onGround) key = b.velocity.y < 0 ? 'alice-jump' : 'alice-fall';
     else if (Math.abs(b.velocity.x) > 20) {
+      const before = Math.floor(this.runClock * 12);
       this.runClock += dt * (Math.abs(b.velocity.x) / PHYS.runSpeed);
-      key = `alice-run${(Math.floor(this.runClock * 12) % 4) + 1}`;
+      const frame = Math.floor(this.runClock * 12);
+      key = `alice-run${(frame % 4) + 1}`;
+      // a footstep whenever a foot lands (frames 1 and 3 of the run cycle)
+      if (frame !== before && frame % 2 === 0) sfx.step(this.scene.def.ground === 'grass' ? 'grass' : 'stone');
     }
     this.view.setTexture(key);
     this.view.setFlipX(this.facing < 0);
@@ -170,7 +174,7 @@ export class Player {
     const breathe = key === 'alice-idle' ? 1 + Math.sin(now / 300) * 0.015 : 1;
     const s = PLAYER.viewH / REF.character;
     this.view.setScale(s, s * breathe);
-    this.view.setAlpha(this.invulnerable && Math.floor(now / 90) % 2 ? 0.35 : 1);
+    this.view.setAlpha(this.invulnerable && Math.floor(now / 60) % 2 ? 0.55 : 1);
   }
 
   /** Returns true if the hit landed. */

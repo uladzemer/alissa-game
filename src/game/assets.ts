@@ -113,6 +113,19 @@ export const ASSETS: Record<string, AssetSpec> = {
   'fg-pillar': A(4, 4, 0, 'none'),
   'fg-thorns': A(4, 4, 0, 'none'),
   'ui-button': A(4, 4, 0, 'none'),
+  riverbed: A(4, 4, 0, 'none'),
+  ffish1: A(4, 4, 0, 'none'),
+  ffish2: A(4, 4, 0, 'none'),
+  ffish3: A(4, 4, 0, 'none'),
+  ffish4: A(4, 4, 0, 'none'),
+  ffish5: A(4, 4, 0, 'none'),
+  ffish6: A(4, 4, 0, 'none'),
+  wplant1: A(4, 4, 0, 'none'),
+  wplant2: A(4, 4, 0, 'none'),
+  wplant3: A(4, 4, 0, 'none'),
+  wplant4: A(4, 4, 0, 'none'),
+  wplant5: A(4, 4, 0, 'none'),
+  wplant6: A(4, 4, 0, 'none'),
   'ui-panel': A(4, 4, 0, 'none'),
   'ui-ribbon': A(4, 4, 0, 'none'),
   'ui-round-pink': A(4, 4, 0, 'none'),
@@ -298,6 +311,14 @@ function makeFxTextures(scene: Phaser.Scene) {
     c.globalCompositeOperation = 'destination-out';
     c.fillStyle = fade;
     c.fillRect(0, 0, 64, 256);
+  });
+  canvas('waterdepth', 4, 256, (c) => {
+    const g = c.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, 'rgba(90,190,245,0.55)');
+    g.addColorStop(0.25, 'rgba(40,140,215,0.6)');
+    g.addColorStop(1, 'rgba(12,55,130,0.78)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 4, 256);
   });
   canvas('wave', 64, 16, (c) => {
     c.fillStyle = 'rgba(230,248,255,0.95)';

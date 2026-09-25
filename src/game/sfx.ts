@@ -24,7 +24,45 @@ function ac(): AudioContext | null {
 
 /** Call from any user gesture so mobile browsers allow sound. */
 export function unlockAudio() {
-  ac();
+  if (ac()) loadSamples();
+}
+
+// --- Recorded sounds: Kenney CC0 packs (public/sfx, see LICENSE-kenney-CC0.txt), ~140 KB in total.
+// Loaded after the first tap (not during boot), each one falls back to the synth until it has arrived.
+const SAMPLE_NAMES = [
+  'jump', 'doublejump', 'star', 'strawberry', 'shoot', 'befriend', 'stomp', 'hurt', 'shield', 'checkpoint',
+  'kesha', 'crystal', 'win', 'click', 'magic', 'bosshit',
+  'step-grass0', 'step-grass1', 'step-grass2', 'step-grass3', 'step-stone0', 'step-stone1', 'step-stone2', 'step-stone3',
+];
+const buffers = new Map<string, AudioBuffer>();
+let loading = false;
+
+function loadSamples() {
+  const a = ctx;
+  if (loading || !a) return;
+  loading = true;
+  for (const name of SAMPLE_NAMES) {
+    fetch(`sfx/${name}.mp3`)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+      .then((data) => a.decodeAudioData(data))
+      .then((buf) => buffers.set(name, buf))
+      .catch(() => undefined); // keep the synth version
+  }
+}
+
+/** Play a recorded sound; false if it is not loaded (then the caller uses the synth). Slight pitch variety. */
+function play(name: string, vol = 1, vary = 0.06) {
+  const buf = buffers.get(name);
+  const a = ctx;
+  if (!buf || !a || !master) return false;
+  const src = a.createBufferSource();
+  const g = a.createGain();
+  src.buffer = buf;
+  src.playbackRate.value = 1 + (Math.random() * 2 - 1) * vary;
+  g.gain.value = vol;
+  src.connect(g).connect(master);
+  src.start();
+  return true;
 }
 
 export function isMuted() {
@@ -69,23 +107,25 @@ function noise(dur: number, vol = 0.2, delay = 0) {
 }
 
 export const sfx = {
-  jump: () => tone(300, 620, 0.15, 'square', 0.12),
-  doubleJump: () => tone(500, 1000, 0.14, 'square', 0.12),
-  star: () => { tone(988, 988, 0.06, 'square', 0.1); tone(1319, 1319, 0.14, 'square', 0.1, 0.06); },
-  strawberry: () => { tone(660, 660, 0.08, 'triangle', 0.25); tone(880, 880, 0.08, 'triangle', 0.25, 0.08); tone(1100, 1100, 0.15, 'triangle', 0.25, 0.16); },
-  shoot: () => tone(900, 1400, 0.1, 'sine', 0.18),
-  befriend: () => { tone(523, 523, 0.1, 'triangle', 0.25); tone(659, 659, 0.1, 'triangle', 0.25, 0.08); tone(784, 784, 0.18, 'triangle', 0.25, 0.16); },
-  stomp: () => tone(400, 150, 0.12, 'square', 0.18),
-  hurt: () => { tone(400, 120, 0.3, 'sawtooth', 0.18); },
-  shield: () => tone(200, 200, 0.08, 'triangle', 0.2),
-  checkpoint: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.12, 'square', 0.1, i * 0.08)); },
+  jump: () => play('jump', 0.55) || tone(300, 620, 0.15, 'square', 0.12),
+  doubleJump: () => play('doublejump', 0.55) || tone(500, 1000, 0.14, 'square', 0.12),
+  star: () => play('star', 0.7, 0.1) || (tone(988, 988, 0.06, 'square', 0.1), tone(1319, 1319, 0.14, 'square', 0.1, 0.06)),
+  strawberry: () => play('strawberry', 0.8, 0) || [660, 880, 1100].forEach((f, i) => tone(f, f, 0.1, 'triangle', 0.25, i * 0.08)),
+  shoot: () => play('shoot', 0.8, 0.1) || tone(900, 1400, 0.1, 'sine', 0.18),
+  befriend: () => play('befriend', 0.8) || [523, 659, 784].forEach((f, i) => tone(f, f, 0.12, 'triangle', 0.25, i * 0.08)),
+  stomp: () => play('stomp', 0.9) || tone(400, 150, 0.12, 'square', 0.18),
+  hurt: () => play('hurt', 0.8, 0) || tone(400, 120, 0.3, 'sawtooth', 0.18),
+  shield: () => play('shield', 0.6) || tone(200, 200, 0.08, 'triangle', 0.2),
+  checkpoint: () => play('checkpoint', 0.7, 0) || [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.12, 'square', 0.1, i * 0.08)),
   splash: () => noise(0.4, 0.25),
-  kesha: () => { tone(1500, 2400, 0.08, 'sine', 0.2); tone(1800, 2600, 0.08, 'sine', 0.2, 0.1); noise(0.3, 0.08, 0.05); },
-  crystal: () => { [784, 988, 1175, 1568, 1976].forEach((f, i) => tone(f, f, 0.25, 'triangle', 0.2, i * 0.09)); },
-  win: () => { [523, 523, 523, 698, 880, 784, 880, 1047].forEach((f, i) => tone(f, f, 0.2, 'square', 0.1, i * 0.14)); },
-  click: () => tone(700, 900, 0.05, 'triangle', 0.2),
-  magic: () => tone(300, 900, 0.35, 'sine', 0.15),
-  bossHit: () => tone(250, 180, 0.12, 'square', 0.2),
+  kesha: () => (play('kesha', 0.6), tone(1500, 2400, 0.08, 'sine', 0.15), tone(1800, 2600, 0.08, 'sine', 0.15, 0.1)),
+  crystal: () => play('crystal', 0.8, 0) || [784, 988, 1175, 1568, 1976].forEach((f, i) => tone(f, f, 0.25, 'triangle', 0.2, i * 0.09)),
+  win: () => play('win', 0.8, 0) || [523, 523, 523, 698, 880, 784, 880, 1047].forEach((f, i) => tone(f, f, 0.2, 'square', 0.1, i * 0.14)),
+  click: () => play('click', 0.8, 0.04) || tone(700, 900, 0.05, 'triangle', 0.2),
+  magic: () => play('magic', 0.6) || tone(300, 900, 0.35, 'sine', 0.15),
+  bossHit: () => play('bosshit', 0.7) || tone(250, 180, 0.12, 'square', 0.2),
+  /** Footstep on grass or stone (quiet, only recorded: no synth fallback). */
+  step: (ground: 'grass' | 'stone') => play(`step-${ground}${Math.floor(Math.random() * 4)}`, 0.35, 0.08),
 };
 
 // --- Music: a small chiptune per world (placeholder until the real soundtrack arrives). ---

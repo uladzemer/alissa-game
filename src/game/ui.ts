@@ -63,6 +63,33 @@ export function ribbon(scene: Phaser.Scene, x: number, y: number, w: number, h: 
   return scene.add.rectangle(x, y, w, h || w / 5.5, 0x6b2a5c, 0.6).setStrokeStyle(4, 0xffffff, 0.6);
 }
 
+/**
+ * A title on a ribbon: the ribbon plus letters laid along its curve (each letter follows the sag and tilts with it).
+ * The curve is measured from ui-ribbon.png: the band's centre sags 23.5px (of 776) from the quarter points to the middle.
+ */
+export function ribbonTitle(scene: Phaser.Scene, x: number, y: number, label: string, size: number, minWidth = 0) {
+  const c = scene.add.container(x, y);
+  const style = titleStyle(size, '#ffffff', '#b8326f');
+  const letters = [...label].map((ch) => scene.add.text(0, 0, ch, style).setOrigin(0.5, 0.5));
+  const advance = letters.map((t) => t.width - style.strokeThickness);
+  const textW = advance.reduce((a, b) => a + b, 0);
+  const w = Math.max(minWidth, textW / 0.56);
+  c.add(ribbon(scene, 0, 0, w, 0));
+  const k = w / 776;
+  const curved = hasArt(scene, 'ui-ribbon');
+  let u = -textW / 2;
+  letters.forEach((t, i) => {
+    const cx = u + advance[i] / 2;
+    u += advance[i];
+    const d = cx / (w * 0.25);
+    const dy = curved ? (-1.5 - 23.5 * d * d) * k : 0;
+    const slope = curved ? (-47 * d) / (0.25 * 776) : 0;
+    t.setPosition(cx, dy - size * 0.12).setRotation(Math.atan(slope));
+    c.add(t);
+  });
+  return c;
+}
+
 export type PlateColor = 'pink' | 'blue' | 'green' | 'lilac';
 const PLATE_FALLBACK: Record<PlateColor, number> = { pink: 0xff5fa8, blue: 0x5fb8ff, green: 0x6fd36f, lilac: 0xb99cff };
 

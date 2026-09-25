@@ -53,11 +53,14 @@ export class HudScene extends Phaser.Scene {
     for (let i = 0; i < PLAYER.heartCap; i++) {
       this.hearts.push(this.add.image(46 + i * 58, 44, 'heart').setScale(46 / 144));
     }
-    this.add.image(56, 104, 'star').setScale(40 / 132);
-    this.starText = this.add.text(86, 104, '0', titleStyle(34, '#ffe36e', '#7a4a00')).setOrigin(0, 0.5);
-    this.add.rectangle(viewW(this) / 2, 42, 270, 60, 0x2a1840, 0.35).setStrokeStyle(3, 0xffffff, 0.5);
+    const pill = this.add.graphics();
+    pill.fillStyle(0x5a2a10, 0.5).fillRoundedRect(26, 80, 136, 48, 24);
+    pill.lineStyle(3, 0xffe08a, 0.9).strokeRoundedRect(26, 80, 136, 48, 24);
+    this.add.image(52, 104, 'star').setScale(40 / 132);
+    this.starText = this.add.text(80, 104, '0', titleStyle(40, '#ffe36e', '#5a2a10')).setOrigin(0, 0.5);
+    paintedPanel(this, viewW(this) / 2, 44, 300, 76);
     for (let i = 0; i < 5; i++) {
-      this.crystals.push(this.add.image(viewW(this) / 2 - 100 + i * 50, 42, 'crystal').setScale(44 / 128));
+      this.crystals.push(this.add.image(viewW(this) / 2 - 100 + i * 50, 44, 'crystal').setScale(46 / 128));
     }
     this.bossBar = this.add.graphics();
     this.bossLabel = this.add.text(viewW(this) / 2, 92, 'Колдунья', titleStyle(24, '#e3b5ff')).setOrigin(0.5).setVisible(false);
@@ -92,7 +95,7 @@ export class HudScene extends Phaser.Scene {
 
   private buildTouch() {
     this.placeKeshaIcon();
-    this.pad = this.add.graphics().setAlpha(0.55);
+    this.pad = this.add.graphics().setAlpha(0.35);
     this.pad.fillStyle(0xffffff, 0.25).fillCircle(PAD.x, PAD.y, PAD.r);
     this.pad.lineStyle(5, 0xffffff, 0.7).strokeCircle(PAD.x, PAD.y, PAD.r);
     const arrow = (dx: number, dy: number) => {
@@ -114,7 +117,7 @@ export class HudScene extends Phaser.Scene {
       g.add(roundPlate(this, 0, 0, r, color));
       if (icon) g.add(this.add.image(0, -8, icon).setScale((r * 0.9) / 200));
       g.add(this.add.text(0, r * 0.62, label, titleStyle(20)).setOrigin(0.5));
-      g.setAlpha(0.9);
+      g.setAlpha(0.7).setScale(0.85);
       this.buttons.push({ name, x, y, r, g });
     };
     mk('jump', this.R(1150), 600, 92, 'blue', 'alice-jump', 'Прыжок');
@@ -154,7 +157,7 @@ export class HudScene extends Phaser.Scene {
       }
     }
     this.padKnob?.setPosition(knob?.x ?? PAD.x, knob?.y ?? PAD.y);
-    for (const b of this.buttons) b.g.setScale(touch[b.name] ? 0.9 : 1);
+    for (const b of this.buttons) b.g.setScale(touch[b.name] ? 0.78 : 0.85).setAlpha(touch[b.name] ? 1 : 0.7);
   }
 
   update() {
@@ -169,8 +172,8 @@ export class HudScene extends Phaser.Scene {
     this.starText.setText(String(L.starsHere));
     const got = load().crystals;
     this.crystals.forEach((c, i) => {
-      c.setTint(got[i] ? 0xffffff : 0x9aa4c8);
-      c.setAlpha(got[i] ? 1 : 0.4);
+      if (got[i]) c.clearTint().setAlpha(1);
+      else c.setTint(0x6b5a7a).setAlpha(0.45);
     });
 
     // Kesha charge ring
@@ -191,8 +194,9 @@ export class HudScene extends Phaser.Scene {
     const w = L.witch;
     if (w && w.state === 'fight') {
       this.bossLabel.setVisible(true);
-      this.bossBar.fillStyle(0x2a1840, 0.8).fillRoundedRect(viewW(this) / 2 - 200, 110, 400, 22, 10);
-      this.bossBar.fillStyle(0xb46cff).fillRoundedRect(viewW(this) / 2 - 196, 114, 392 * (w.hp / w.maxHp), 14, 7);
+      this.bossBar.fillStyle(0x4a1a3a, 1).fillRoundedRect(viewW(this) / 2 - 203, 107, 406, 28, 12);
+      this.bossBar.fillStyle(0xfff1dc, 1).fillRoundedRect(viewW(this) / 2 - 200, 110, 400, 22, 10);
+      this.bossBar.fillStyle(0xff4fa3).fillRoundedRect(viewW(this) / 2 - 197, 113, 394 * (w.hp / w.maxHp), 16, 8);
     } else this.bossLabel.setVisible(false);
   }
 
@@ -213,7 +217,8 @@ export class HudScene extends Phaser.Scene {
       this.closePause();
       this.level.scene.start('Map');
     });
-    const snd = button(505, isMuted() ? 'Звук: выкл' : 'Звук: вкл', () => snd.setText(toggleMute() ? 'Звук: выкл' : 'Звук: вкл'));
+    const label = (muted: boolean) => (muted ? '🔇 Звук выключен' : '🔊 Звук включён');
+    const snd = button(505, label(isMuted()), () => snd.setText(label(toggleMute())));
     this.pauseLayer = c;
     // listen for ESC from the next frame on: the press that opened the pause is still being dispatched
     this.time.delayedCall(60, () => this.input.keyboard?.once('keydown-ESC', this.escClose));

@@ -1,11 +1,11 @@
 import Phaser from 'phaser';
-import { GAME_H, TILE, PLAYER, titleStyle, viewW, LOW_POWER } from '../game/constants';
+import { GAME_H, TILE, PLAYER, titleStyle, viewW, LOW_POWER, QUALITY, plural } from '../game/constants';
 import { LEVELS, LevelDef } from '../game/levels';
 import { Player } from '../game/player';
 import { Enemy, ENEMY_CHARS, Witch } from '../game/enemies';
 import { Keyboard, InputState, blank } from '../game/controls';
 import { hasArt } from '../game/assets';
-import { paintedButton, paintedPanel, ribbon } from '../game/ui';
+import { paintedButton, paintedPanel, ribbonTitle } from '../game/ui';
 import { sfx, playMusic, stopMusic } from '../game/sfx';
 import { load, save } from '../game/save';
 
@@ -57,7 +57,11 @@ export class LevelScene extends Phaser.Scene {
   /** Static scenery (ground, decor, water): hidden while off-screen so the GPU only draws what is visible. */
   private statics: { obj: Phaser.GameObjects.Components.Visible; rect: Phaser.Geom.Rectangle }[] = [];
   private cullTick = 0;
+  private slowSeconds = 0;
+  private fpsTimer = 0;
   private fg: Phaser.GameObjects.Image[] = [];
+  private waterRuns: { x1: number; x2: number; top: number; bottom: number }[] = [];
+  private swimmers: { img: Phaser.GameObjects.Image; run: { x1: number; x2: number; top: number; bottom: number }; y: number; speed: number; dir: number; phase: number; bubble?: boolean }[] = [];
   private rays: Phaser.GameObjects.Image[] = [];
   private vignette!: Phaser.GameObjects.Image;
   private motes: { img: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; par: number; phase: number; flutter?: boolean }[] = [];
@@ -86,11 +90,16 @@ export class LevelScene extends Phaser.Scene {
     this.keshaReadyAt = 0;
     this.prevInput = blank();
     this.respawning = false;
+    this.lookAhead = 0;
     this.waves = [];
     this.mid = null;
     this.near = null;
     this.statics = [];
     this.fg = [];
+    this.slowSeconds = 0;
+    this.fpsTimer = 0;
+    this.waterRuns = [];
+    this.swimmers = [];
     this.rays = [];
     this.motes = [];
   }
@@ -132,6 +141,7 @@ export class LevelScene extends Phaser.Scene {
       if (typeof o.getBounds === 'function' && typeof o.setVisible === 'function') this.statics.push({ obj: o, rect: o.getBounds() });
     }
     this.addForeground();
+    this.addUnderwaterLife();
     this.spawnThings();
 
     const cam = this.cameras.main;
@@ -165,9 +175,7 @@ export class LevelScene extends Phaser.Scene {
 
     // level title on a ribbon, so it never blends into the picture behind it
     const banner = this.add.container(viewW(this) / 2, GAME_H * 0.3).setScrollFactor(0).setDepth(100);
-    const bannerText = this.add.text(0, -8, this.def.name, titleStyle(44, '#ffffff', '#b8326f')).setOrigin(0.5);
-    banner.add(ribbon(this, 0, 0, Math.max(640, bannerText.width + 300), 0));
-    banner.add(bannerText);
+    banner.add(ribbonTitle(this, 0, 0, this.def.name, 42, 640));
     banner.add(this.add.text(0, 92, this.def.goal, titleStyle(32)).setOrigin(0.5));
     this.tweens.add({ targets: banner, alpha: 0, delay: 2200, duration: 600, onComplete: () => banner.destroy() });
   }
@@ -296,8 +304,43 @@ export class LevelScene extends Phaser.Scene {
       const w = (x2 - x1 + 1) * TILE;
       const surface = this.waterSurface(y);
       const depth = (this.rows - y + 1) * TILE;
-      this.add.rectangle(x1 * TILE, surface, w, depth, 0x2f86d6, 0.78).setOrigin(0).setDepth(25);
-      this.add.rectangle(x1 * TILE, surface, w, 30, 0x6cc6ff, 0.55).setOrigin(0).setDepth(25);
+      const bottom = this.rows * TILE + 8;
+      this.waterRuns.push({ x1: x1 * TILE, x2: (x2 + 1) * TILE, top: surface, bottom });
+      // riverbed and plants sit UNDER the water tint, so they look deep and blue
+      if (hasArt(this, 'riverbed')) {
+        const bedSrc = this.textures.get('riverbed').getSourceImage() as { height: number };
+        const bed = this.add.tileSprite(x1 * TILE, bottom, w, 240, 'riverbed').setOrigin(0, 1).setDepth(24.1);
+        bed.setTileScale(240 / bedSrc.height);
+        bed.setTilePosition((x1 * TILE) / bed.tileScaleX, 0);
+      } else {
+        this.add.rectangle(x1 * TILE, bottom, w, 40, 0xd9b77a).setOrigin(0, 1).setDepth(24.1);
+      }
+      const plants = ['wplant1', 'wplant2', 'wplant3', 'wplant4', 'wplant5', 'wplant6'].filter((k) => hasArt(this, k));
+      for (let px = x1 * TILE + 40; plants.length && px < (x2 + 1) * TILE - 30; px += 70 + ((px * 7) % 90)) {
+        const h = Math.abs(Math.sin(px * 0.137) * 1000) % 1;
+        const key = plants[Math.floor(h * 60) % plants.length];
+        // plants always stay under the surface
+        const tall = Math.min(key === 'wplant1' || key === 'wplant2' ? 150 + h * 70 : 60 + h * 30, bottom - surface - 40);
+        const p = this.add.image(px, bottom - 6, key).setOrigin(0.5, 1).setDepth(24.2);
+        p.setScale(tall / p.height);
+        if (key === 'wplant1' || key === 'wplant2') {
+          this.tweens.add({ targets: p, angle: { from: -6, to: 6 }, yoyo: true, repeat: -1, duration: 1800 + h * 1200, ease: 'Sine.easeInOut' });
+        }
+      }
+      // body of water: light at the surface, deep blue below (gradient texture, stretched only vertically)
+      this.add.image(x1 * TILE, surface, 'waterdepth').setOrigin(0).setDisplaySize(w, depth).setDepth(25);
+      // the surface plane: a lighter band seen slightly from above, like the grass top of the ground
+      this.add.rectangle(x1 * TILE, surface, w, 16, 0xbfeaff, 0.55).setOrigin(0).setDepth(25.2);
+      this.add.rectangle(x1 * TILE, surface + 16, w, 4, 0x1d5fa8, 0.35).setOrigin(0).setDepth(25.2);
+      // soft banks where the water meets the ground on both sides
+      this.add.image(x1 * TILE, surface, 'side').setOrigin(0).setDisplaySize(28, depth).setDepth(25.1).setAlpha(0.9);
+      this.add.image((x2 + 1) * TILE, surface, 'side').setOrigin(1, 0).setFlipX(true).setDisplaySize(28, depth).setDepth(25.1).setAlpha(0.9);
+      // light beams under the water (skipped on weak devices)
+      for (let i = 0; i < (QUALITY.lite || LOW_POWER ? 0 : Math.ceil(w / 260)); i++) {
+        const ray = this.add.image(x1 * TILE + 60 + i * 260, surface + 10, 'ray').setOrigin(0.5, 0).setDepth(25.3);
+        ray.setDisplaySize(70, depth).setAngle(-12).setTint(0xcff6ff).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.12);
+        this.tweens.add({ targets: ray, alpha: 0.24, angle: -6, yoyo: true, repeat: -1, duration: 2400 + i * 500, ease: 'Sine.easeInOut' });
+      }
       const foam = this.add.tileSprite(x1 * TILE, surface - 6, w, 16, 'wave').setOrigin(0).setDepth(25.5).setAlpha(0.85);
       this.waves.push(foam);
       for (let i = 0; i < Math.ceil(w / 90); i++) {
@@ -438,8 +481,9 @@ export class LevelScene extends Phaser.Scene {
         else if (c === 'L') {
           // under Alice (20) and under the water (25): she stands ON the pad, the water laps its lower edge;
           // no bobbing, the pad must not move away from her feet
-          const img = this.add.image(cx, y * TILE - 10, 'lily').setOrigin(0.5, 0).setDepth(19);
-          img.setScale((TILE + 24) / img.width);
+          const img = this.add.image(cx, y * TILE - 12, 'lily').setOrigin(0.5, 0).setDepth(19);
+          img.setScale((TILE + 14) / img.width);
+          this.add.image(cx, y * TILE + 14, 'shadow').setDisplaySize(TILE + 10, 16).setDepth(18.9).setAlpha(0.7);
         } else if (c === 'W') this.witch = new Witch(this, x, y);
         else if (ENEMY_CHARS[c]) {
           const kind = ENEMY_CHARS[c];
@@ -516,9 +560,9 @@ export class LevelScene extends Phaser.Scene {
       castle: { color: 0xd59bff, add: true, count: 24, rays: 0, rayTint: 0, vignette: 0.5, butterflies: 0 },
     };
     const L = look[this.def.world];
-    if (LOW_POWER) {
-      L.count = Math.round(L.count * 0.5);
-      L.rays = Math.min(L.rays, 2);
+    if (LOW_POWER || QUALITY.lite) {
+      L.count = Math.round(L.count * (QUALITY.lite && !LOW_POWER ? 0.3 : 0.5));
+      L.rays = QUALITY.lite ? 0 : Math.min(L.rays, 2);
     }
     for (let i = 0; i < L.rays; i++) {
       const ray = this.add.image(W * (0.15 + i * 0.25), -40, 'ray').setOrigin(0.5, 0).setScrollFactor(0).setDepth(-12);
@@ -549,7 +593,7 @@ export class LevelScene extends Phaser.Scene {
   private addForeground() {
     const dark = this.def.world === 'cave' || this.def.world === 'castle';
     const keys = (dark ? ['fg-rock', 'fg-stalagmite', 'fg-pillar', 'fg-thorns'] : ['fg-grass', 'fg-leaves', 'fg-fern', 'fg-bush']).filter((k) => hasArt(this, k));
-    if (!keys.length) return;
+    if (!keys.length || QUALITY.lite) return;
     const f = 1.35;
     const span = this.cols * TILE * f + Math.max(viewW(this), 1920);
     const count = Math.floor(span / (LOW_POWER ? 1300 : 900));
@@ -570,7 +614,73 @@ export class LevelScene extends Phaser.Scene {
     this.bg.y = -(this.bg.displayHeight - GAME_H) * 0.4;
   }
 
+  /** Fairy-tale fish and bubbles living under the water (they never touch Alice). */
+  private addUnderwaterLife() {
+    const kinds = ['ffish1', 'ffish2', 'ffish3', 'ffish4', 'ffish5', 'ffish6'].filter((k) => hasArt(this, k));
+    for (const run of this.waterRuns) {
+      const span = run.bottom - run.top;
+      const n = kinds.length ? Math.max(1, Math.round((run.x2 - run.x1) / (LOW_POWER ? 420 : 260))) : 0;
+      for (let i = 0; i < n; i++) {
+        const key = kinds[(i + Math.floor(run.x1 / 64)) % kinds.length];
+        const img = this.add.image(run.x1 + Math.random() * (run.x2 - run.x1), 0, key).setDepth(24.4);
+        img.setScale((key === 'ffish4' ? 64 : 46 + Math.random() * 14) / img.height);
+        const y = run.top + 40 + Math.random() * Math.max(10, span - 110);
+        this.swimmers.push({ img, run, y, speed: 30 + Math.random() * 40, dir: Math.random() > 0.5 ? 1 : -1, phase: Math.random() * 6 });
+      }
+      for (let i = 0; i < (QUALITY.lite ? 0 : Math.ceil((run.x2 - run.x1) / (LOW_POWER ? 400 : 200))); i++) {
+        const img = this.add.image(run.x1 + Math.random() * (run.x2 - run.x1), run.bottom - Math.random() * span, 'glow').setDepth(25.4);
+        img.setScale(0.1 + Math.random() * 0.08).setAlpha(0.7).setTint(0xe8fbff);
+        this.swimmers.push({ img, run, y: img.y, speed: 40 + Math.random() * 40, dir: 0, phase: Math.random() * 6, bubble: true });
+      }
+    }
+  }
+
+  /** If the device cannot keep up (under ~26 fps for 4 s in a row; a 30 fps power-saving cap is fine), drop decorative effects for good. */
+  private watchFrameRate(dt: number) {
+    if (QUALITY.lite || QUALITY.locked) return;
+    this.fpsTimer += dt;
+    if (this.fpsTimer < 1) return;
+    this.fpsTimer = 0;
+    this.slowSeconds = this.game.loop.actualFps < 26 ? this.slowSeconds + 1 : 0;
+    if (this.slowSeconds < 4) return;
+    QUALITY.lite = true;
+    for (const m of this.motes) m.img.destroy();
+    this.motes = [];
+    for (const r of this.rays) r.destroy();
+    this.rays = [];
+    for (const f of this.fg) f.destroy();
+    this.fg = [];
+    this.swimmers = this.swimmers.filter((s) => {
+      if (s.bubble) s.img.destroy();
+      return !s.bubble;
+    });
+  }
+
+  private lookAhead = 0;
+
   private updateLayers(now: number, dt: number) {
+    this.watchFrameRate(dt);
+    // camera looks ahead where Alice is running, so hazards appear early (and not under the touch buttons)
+    const cam0 = this.cameras.main;
+    const target = this.player.facing * Math.min(180, viewW(this) * 0.14);
+    this.lookAhead += (target - this.lookAhead) * Math.min(1, dt * 1.5);
+    cam0.setFollowOffset(-this.lookAhead, 40);
+    const t = now / 1000;
+    for (const s of this.swimmers) {
+      if (s.bubble) {
+        s.y -= s.speed * dt;
+        if (s.y < s.run.top + 14) s.y = s.run.bottom - 10;
+        s.img.setPosition(s.img.x + Math.sin(t * 3 + s.phase) * 0.4, s.y);
+        continue;
+      }
+      let x = s.img.x + s.dir * s.speed * dt;
+      if (x < s.run.x1 + 30 || x > s.run.x2 - 30) {
+        s.dir *= -1;
+        x = Phaser.Math.Clamp(x, s.run.x1 + 30, s.run.x2 - 30);
+      }
+      s.img.setPosition(x, s.y + Math.sin(t * 1.6 + s.phase) * 8).setFlipX(s.dir < 0);
+      s.img.setAngle(Math.sin(t * 5 + s.phase) * 4);
+    }
     const cam = this.cameras.main;
     const maxY = Math.max(0, this.rows * TILE - GAME_H);
     const maxX = Math.max(1, this.cols * TILE - viewW(this));
@@ -1038,10 +1148,10 @@ export class LevelScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const panel = this.add.container(viewW(this) / 2, GAME_H / 2).setScrollFactor(0).setDepth(200);
     panel.add(paintedPanel(this, 0, 0, 660, 400));
-    panel.add(this.add.text(0, -110, 'Кристалл найден!', titleStyle(52, '#ff5fa8', '#ffffff')).setOrigin(0.5));
-    panel.add(this.add.text(0, -30, `★ ${this.starsHere} звёздочек`, titleStyle(36, '#ffc93a', '#8a5a00')).setOrigin(0.5));
+    panel.add(this.add.text(0, -110, 'Ключик найден!', titleStyle(52, '#ff5fa8', '#ffffff')).setOrigin(0.5));
+    panel.add(this.add.text(0, -30, `★ ${this.starsHere} ${plural(this.starsHere, 'звёздочка', 'звёздочки', 'звёздочек')}`, titleStyle(36, '#ffc93a', '#8a5a00')).setOrigin(0.5));
     const crystals = load().crystals.filter(Boolean).length;
-    panel.add(this.add.text(0, 25, `Кристаллов: ${crystals} из 5`, titleStyle(30, '#49c9e8', '#1d4e6b')).setOrigin(0.5));
+    panel.add(this.add.text(0, 25, `Волшебных ключиков: ${crystals} из 5`, titleStyle(30, '#49c9e8', '#1d4e6b')).setOrigin(0.5));
     const go = () => {
       cam.fadeOut(300);
       this.time.delayedCall(320, () => this.scene.start('Map'));

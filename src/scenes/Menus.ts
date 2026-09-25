@@ -5,7 +5,7 @@ import { LEVELS } from '../game/levels';
 import { load, save } from '../game/save';
 import { sfx, unlockAudio, playMusic, stopMusic } from '../game/sfx';
 import { isTouchDevice } from '../game/controls';
-import { paintedButton, paintedPanel, ribbon, roundPlate } from '../game/ui';
+import { paintedButton, paintedPanel, ribbonTitle, roundPlate } from '../game/ui';
 
 /** Menus are laid out for 1280x720; on wider screens the camera keeps that layout centred. */
 const leaving = new WeakSet<Phaser.Scene>();
@@ -84,16 +84,18 @@ export class TitleScene extends Phaser.Scene {
 
   create() {
     cover(this, 'title');
-    const logo = this.add.text(GAME_W / 2, 74, 'Приключения Алисы', titleStyle(72, '#ffffff', '#d6337f')).setOrigin(0.5);
-    ribbon(this, GAME_W / 2, 84, logo.width + 300, 0);
-    this.children.bringToTop(logo);
-    logo.setShadow(0, 6, '#6b2a5c', 8, true, true);
-    this.tweens.add({ targets: logo, scale: 1.04, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut' });
+    // in the sky between Kesha (left) and the castle (right): the ribbon must not cover either of them
+    const logo = ribbonTitle(this, GAME_W * 0.52, 92, 'Приключения Алисы', 46);
+    this.tweens.add({ targets: logo, scale: 1.03, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut' });
     const play = button(this, GAME_W * 0.72, GAME_H * 0.63, '▶  Играть', 56, () => this.start());
     this.tweens.add({ targets: play, scale: 1.08, yoyo: true, repeat: -1, duration: 700 });
-    this.add
-      .text(GAME_W / 2, GAME_H - 40, isTouchDevice() ? 'Кнопки на экране: слева — ходить, справа — прыгать и стрелять' : 'Стрелки — бег  •  Пробел — прыжок  •  X — сердечки  •  Z — щит  •  C — Кеша', titleStyle(22))
-      .setOrigin(0.5);
+    const hintY = GAME_H - (isTouchDevice() ? 70 : 40);
+    const hint = this.add
+      .text(GAME_W / 2, hintY, isTouchDevice() ? 'Кнопки на экране: слева — ходить, справа — прыгать и стрелять' : 'Стрелки — бег  •  Пробел — прыжок  •  X — сердечки  •  Z — щит  •  C — Кеша', titleStyle(22))
+      .setOrigin(0.5)
+      .setDepth(2);
+    const hb = this.add.graphics();
+    hb.fillStyle(0x3c143c, 0.55).fillRoundedRect(hint.x - hint.width / 2 - 18, hintY - hint.height / 2 - 8, hint.width + 36, hint.height + 16, 18);
     this.input.keyboard?.once('keydown-ENTER', () => this.start());
     this.input.keyboard?.once('keydown-SPACE', () => this.start());
   }
@@ -219,7 +221,7 @@ export class MapScene extends Phaser.Scene {
     this.marker = this.add.image(0, 0, 'alice-idle').setOrigin(0.5, 1).setScale(110 / 200);
     this.placeMarker();
     this.tweens.add({ targets: this.marker, scaleY: this.marker.scaleY * 1.04, yoyo: true, repeat: -1, duration: 500 });
-    this.add.text(GAME_W / 2, GAME_H - 30, `★ ${data.stars}   •   Кристаллов: ${data.crystals.filter(Boolean).length} из 5`, titleStyle(28, '#ffe36e', '#7a4a00')).setOrigin(0.5);
+    this.add.text(GAME_W / 2, GAME_H - 30, `★ ${data.stars}   •   Ключиков: ${data.crystals.filter(Boolean).length} из 5`, titleStyle(28, '#ffe36e', '#7a4a00')).setOrigin(0.5);
     button(this, 90, 50, '◀', 32, () => this.scene.start('Title'));
 
     const kb = this.input.keyboard!;
@@ -264,17 +266,17 @@ export class EndingScene extends Phaser.Scene {
     playMusic('title');
     // all captions sit in a band at the bottom, over legs and flowers, so no face is covered
     this.add.rectangle(GAME_W / 2, GAME_H - 32, viewW(this) + 20, 64, 0x6b2a5c, 0.6).setDepth(5);
-    ribbon(this, GAME_W / 2 + 90, GAME_H - 150, 860, 0).setDepth(5);
-    const t = this.add.text(GAME_W / 2 + 90, GAME_H - 158, 'Ура! Алиса спасла принца!', titleStyle(50, '#ffffff', '#d6337f')).setOrigin(0.5).setDepth(6);
+    const t = ribbonTitle(this, GAME_W / 2 + 60, GAME_H - 180, 'Ура! Алиса спасла принца!', 44).setDepth(6);
     this.tweens.add({ targets: t, scale: 1.04, yoyo: true, repeat: -1, duration: 800 });
     this.add
-      .text(GAME_W / 2 + 90, GAME_H - 32, `Король устроил праздник, а колдунья теперь печёт пироги.  ★ ${load().stars}`, titleStyle(24))
+      .text(GAME_W / 2 - 80, GAME_H - 32, `Король устроил праздник, а колдунья теперь печёт пироги.  ★ ${load().stars}`, titleStyle(24))
       .setOrigin(0.5)
       .setDepth(6);
     for (let i = 0; i < 24; i++) {
-      const h = this.add.image(Phaser.Math.Between(0, GAME_W), GAME_H + 40, i % 3 ? 'heart' : 'star').setScale(0.2 + Math.random() * 0.15).setDepth(1);
-      this.tweens.add({ targets: h, y: -60, x: h.x + Phaser.Math.Between(-80, 80), duration: 4000 + Math.random() * 3000, delay: Math.random() * 3000, repeat: -1 });
+      const h = this.add.image(Phaser.Math.Between(0, GAME_W), GAME_H - 70, i % 3 ? 'heart' : 'star').setScale(0.2 + Math.random() * 0.15).setDepth(1);
+      h.setAlpha(0);
+      this.tweens.add({ targets: h, y: -60, alpha: { from: 0.2, to: 1 }, x: h.x + Phaser.Math.Between(-80, 80), duration: 4000 + Math.random() * 3000, delay: Math.random() * 3000, repeat: -1 });
     }
-    button(this, 130, GAME_H - 150, 'Ещё раз', 32, () => this.scene.start('Map')).setDepth(7);
+    button(this, GAME_W - 130, GAME_H - 34, 'Ещё раз', 26, () => this.scene.start('Map')).setDepth(7);
   }
 }

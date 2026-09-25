@@ -13,6 +13,18 @@ export const LOW_POWER =
   (navigator.maxTouchPoints > 0 || /Android|iPhone|iPad/i.test(navigator.userAgent)) &&
   ((navigator.hardwareConcurrency ?? 4) <= 6 || ((navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 4) <= 4);
 
+/** Set at runtime when the frame rate stays low: from then on levels skip decorative effects. */
+export const QUALITY = { lite: false, locked: false };
+
+/** Russian plural: plural(1, 'звёздочка', 'звёздочки', 'звёздочек'). */
+export function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
 export const FONT = '"Nunito", "Trebuchet MS", "Arial Rounded MT Bold", system-ui, sans-serif';
 
 export const PHYS = {
@@ -29,7 +41,7 @@ export const PHYS = {
 export const PLAYER = {
   bodyW: 40,
   bodyH: 88,
-  viewH: 104,
+  viewH: 114,
   maxHearts: 3,
   heartCap: 5,
   invulnMs: 1500,

@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { GAME_W, GAME_H, PHYS } from './game/constants';
+import { GAME_W, GAME_H, PHYS, QUALITY } from './game/constants';
 import { BootScene, TitleScene, StoryScene, MapScene, EndingScene } from './scenes/Menus';
 import { LevelScene } from './scenes/Level';
 import { HudScene } from './scenes/Hud';
@@ -36,3 +36,4 @@ window.addEventListener('resize', () => {
 // handy for automated checks in the browser console
 (window as unknown as { __game: Phaser.Game }).__game = game;
 (window as unknown as { __touch: typeof touch }).__touch = touch;
+(window as unknown as { __quality: typeof QUALITY }).__quality = QUALITY;
