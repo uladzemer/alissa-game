@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffb3d1" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@800;900&subset=cyrillic&display=swap" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./assets/star.png" />
+  <title>Приключения Алисы</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #2a1840; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    #game { position: fixed; inset: 0; }
+    #rotate { display: none; position: fixed; inset: 0; z-index: 10; background: #ffb3d1; color: #5a1f4a;
+      font: 700 24px/1.4 system-ui, sans-serif; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+    #rotate span { font-size: 64px; display: block; }
+    @media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="rotate"><div><span>📱↻</span>Поверни телефон боком,<br />чтобы играть!</div></div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

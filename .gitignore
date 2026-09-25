@@ -3,3 +3,6 @@ dist/
 .claude/worktrees/
 art/incoming/
 *.log
+art/shots/
+art/contact*.png
+.playwright-mcp/

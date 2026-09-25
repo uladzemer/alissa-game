@@ -1,0 +1,214 @@
+import Phaser from 'phaser';
+import { PHYS, PLAYER } from './constants';
+import { REF_H as REF } from './assets';
+import { InputState } from './controls';
+import { sfx } from './sfx';
+import type { LevelScene } from '../scenes/Level';
+
+type Body = Phaser.Physics.Arcade.Body;
+
+export class Player {
+  zone: Phaser.GameObjects.Zone;
+  body: Body;
+  view: Phaser.GameObjects.Image;
+  facing = 1;
+  hearts: number;
+  maxHearts: number;
+  climbing = false;
+  shieldOn = false;
+  frozen = false;
+
+  private lastGround = -9999;
+  private jumpBufferUntil = -9999;
+  private airJumps = 0;
+  private climbLockUntil = 0;
+  private invulnUntil = 0;
+  private hurtUntil = 0;
+  private shootAnimUntil = 0;
+  private shootReadyAt = 0;
+  private prev: InputState | null = null;
+  private runClock = 0;
+  private climbClock = 0;
+
+  constructor(private scene: LevelScene, x: number, y: number, maxHearts: number) {
+    this.zone = scene.add.zone(x, y, PLAYER.bodyW, PLAYER.bodyH);
+    scene.physics.add.existing(this.zone);
+    this.body = this.zone.body as Body;
+    this.body.setMaxVelocityY(1150);
+    this.view = scene.add.image(x, y, 'alice-idle').setOrigin(0.5, 1).setDepth(20);
+    this.view.setScale(PLAYER.viewH / REF.character);
+    this.maxHearts = maxHearts;
+    this.hearts = maxHearts;
+  }
+
+  get invulnerable() {
+    return this.scene.time.now < this.invulnUntil;
+  }
+
+  get onGround() {
+    return this.body.blocked.down || this.body.touching.down;
+  }
+
+  update(inp: InputState, dt: number) {
+    const now = this.scene.time.now;
+    const b = this.body;
+    const prev = this.prev ?? inp;
+    const jumpPressed = inp.jump && !prev.jump;
+    const jumpReleased = !inp.jump && prev.jump;
+    this.prev = { ...inp };
+
+    if (this.frozen) {
+      b.setVelocityX(0);
+      this.render(now, dt);
+      return;
+    }
+
+    if (this.onGround) {
+      this.lastGround = now;
+      this.airJumps = 0;
+    }
+    if (jumpPressed) this.jumpBufferUntil = now + PHYS.jumpBufferMs;
+
+    const hurt = now < this.hurtUntil;
+    const dir = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+    if (dir !== 0 && !hurt) this.facing = dir;
+
+    // --- climbing trees and vines ---
+    const climbHere = this.scene.climbableAt(b.center.x, b.center.y);
+    if (!this.climbing && climbHere && (inp.up || (inp.down && !this.onGround)) && now > this.climbLockUntil && !hurt) {
+      this.climbing = true;
+      this.airJumps = 0;
+    }
+    if (this.climbing) {
+      if (!climbHere || (inp.down && this.onGround)) {
+        this.stopClimb();
+      } else {
+        b.setAllowGravity(false);
+        const cx = this.scene.climbCenterX(b.center.x);
+        const topBlocked = inp.up && !this.scene.climbableAt(b.center.x, b.top + 6);
+        if (topBlocked && this.scene.floorAt(b.center.x, b.top - 10)) {
+          // top of a tree or vine with a crown/platform above: pull Alice up onto it
+          this.stopClimb();
+          this.climbLockUntil = now + 400;
+          b.setVelocity(0, -720);
+          this.render(now, dt);
+          return;
+        }
+        const vy = topBlocked ? 0 : inp.up ? -PHYS.climbSpeed : inp.down ? PHYS.climbSpeed : 0;
+        b.setVelocity((cx - b.center.x) * 10 + dir * 60, vy);
+        if (vy !== 0) this.climbClock += dt;
+        if (this.jumpBufferUntil > now) {
+          this.jumpBufferUntil = 0;
+          this.stopClimb();
+          this.climbLockUntil = now + 280;
+          b.setVelocity(dir * PHYS.runSpeed, -PHYS.jumpVel * 0.95);
+          this.airJumps = 0;
+          sfx.jump();
+        }
+        this.render(now, dt);
+        return;
+      }
+    }
+
+    // --- running, shield ---
+    this.shieldOn = inp.shield && !hurt;
+    if (!hurt) {
+      const speed = this.shieldOn ? PHYS.shieldSpeed : PHYS.runSpeed;
+      const target = dir * speed;
+      const accel = this.onGround ? 0.35 : 0.2;
+      b.setVelocityX(Phaser.Math.Linear(b.velocity.x, target, accel));
+      if (Math.abs(b.velocity.x) < 4 && dir === 0) b.setVelocityX(0);
+    }
+
+    // --- jumping: coyote time, buffer, double jump, variable height ---
+    if (this.jumpBufferUntil > now && !hurt) {
+      if (now - this.lastGround < PHYS.coyoteMs) {
+        b.setVelocityY(-PHYS.jumpVel);
+        this.lastGround = -9999;
+        this.jumpBufferUntil = 0;
+        sfx.jump();
+      } else if (this.airJumps < 1) {
+        b.setVelocityY(-PHYS.doubleJumpVel);
+        this.airJumps++;
+        this.jumpBufferUntil = 0;
+        sfx.doubleJump();
+        this.scene.puff(b.center.x, b.bottom, 0xffffff);
+      }
+    }
+    if (jumpReleased && b.velocity.y < -380) b.setVelocityY(b.velocity.y * 0.5);
+
+    // --- shooting hearts ---
+    if (inp.shoot && now >= this.shootReadyAt && !this.shieldOn && !hurt) {
+      this.shootReadyAt = now + PLAYER.shootCdMs;
+      this.shootAnimUntil = now + 220;
+      this.scene.shootHeart(b.center.x + this.facing * 40, b.center.y - 6, this.facing);
+    }
+
+    this.render(now, dt);
+  }
+
+  private stopClimb() {
+    this.climbing = false;
+    this.body.setAllowGravity(true);
+  }
+
+  private render(now: number, dt: number) {
+    const b = this.body;
+    let key = 'alice-idle';
+    if (now < this.hurtUntil) key = 'alice-hurt';
+    else if (this.climbing) key = Math.floor(this.climbClock * 6) % 2 ? 'alice-climb2' : 'alice-climb1';
+    else if (this.shieldOn) key = 'alice-shield';
+    else if (now < this.shootAnimUntil) key = 'alice-shoot';
+    else if (!this.onGround) key = b.velocity.y < 0 ? 'alice-jump' : 'alice-fall';
+    else if (Math.abs(b.velocity.x) > 20) {
+      this.runClock += dt * (Math.abs(b.velocity.x) / PHYS.runSpeed);
+      key = `alice-run${(Math.floor(this.runClock * 12) % 4) + 1}`;
+    }
+    this.view.setTexture(key);
+    this.view.setFlipX(this.facing < 0);
+    this.view.setPosition(b.center.x, b.bottom + 3);
+    const breathe = key === 'alice-idle' ? 1 + Math.sin(now / 300) * 0.015 : 1;
+    const s = PLAYER.viewH / REF.character;
+    this.view.setScale(s, s * breathe);
+    this.view.setAlpha(this.invulnerable && Math.floor(now / 90) % 2 ? 0.35 : 1);
+  }
+
+  /** Returns true if the hit landed. */
+  hurt(fromX: number) {
+    const now = this.scene.time.now;
+    if (this.invulnerable || this.frozen) return false;
+    if (this.climbing) this.stopClimb();
+    this.hearts -= 1;
+    this.invulnUntil = now + PLAYER.invulnMs;
+    this.hurtUntil = now + 380;
+    const away = this.body.center.x < fromX ? -1 : 1;
+    this.body.setVelocity(away * 320, -520);
+    sfx.hurt();
+    this.scene.cameras.main.shake(160, 0.006);
+    return true;
+  }
+
+  /** Blocked by the shield: small push back, no damage. */
+  blocked(fromX: number) {
+    const away = this.body.center.x < fromX ? -1 : 1;
+    this.body.setVelocityX(away * 200);
+    this.invulnUntil = this.scene.time.now + 250;
+    sfx.shield();
+  }
+
+  bounce() {
+    this.body.setVelocityY(-PHYS.jumpVel * 0.75);
+    this.airJumps = 0;
+  }
+
+  teleport(x: number, y: number) {
+    if (this.climbing) this.stopClimb();
+    this.body.reset(x, y);
+    this.body.setVelocity(0, 0);
+    this.invulnUntil = this.scene.time.now + PLAYER.invulnMs;
+  }
+
+  heal(n = 1) {
+    this.hearts = Math.min(this.maxHearts, this.hearts + n);
+  }
+}
