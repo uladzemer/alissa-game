@@ -41,13 +41,23 @@ function loadSamples() {
   const a = ctx;
   if (loading || !a) return;
   loading = true;
-  for (const name of SAMPLE_NAMES) {
-    fetch(`sfx/${name}.mp3`)
-      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
-      .then((data) => a.decodeAudioData(data))
-      .then((buf) => buffers.set(name, buf))
-      .catch(() => undefined); // keep the synth version
-  }
+  // one sfx.json with every MP3 in base64 (built by art/build_assets.py): download-manager extensions
+  // grab *.mp3 requests and save them as files, a json request they leave alone
+  fetch('sfx.json')
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((pack: Record<string, string>) => {
+      for (const name of SAMPLE_NAMES) {
+        const b64 = pack[name];
+        if (!b64) continue;
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        a.decodeAudioData(bytes.buffer)
+          .then((buf) => buffers.set(name, buf))
+          .catch(() => undefined); // keep the synth version
+      }
+    })
+    .catch(() => undefined);
 }
 
 /** Play a recorded sound; false if it is not loaded (then the caller uses the synth). Slight pitch variety. */

@@ -312,3 +312,14 @@ if idle.exists():
     a = a.resize((round(a.width * 440 / a.height), 440), Image.LANCZOS)
     icon.paste(a, ((512 - a.width) // 2, 50), a)
     icon.save(OUT / 'icon.png')
+
+# Sounds: all MP3s packed into ONE json (base64). Download-manager browser extensions intercept
+# *.mp3 requests and save them as files instead of letting the game play them; a .json is left alone,
+# and one request is lighter for weak phones than 24.
+import base64, json
+SFX = ROOT / 'sfx'  # source MP3s (Kenney CC0); only the packed json and the license are published
+if SFX.exists():
+    pack = {p.stem: base64.b64encode(p.read_bytes()).decode('ascii') for p in sorted(SFX.glob('*.mp3'))}
+    (ROOT.parent / 'public' / 'sfx.json').write_text(json.dumps(pack), encoding='ascii')
+    (ROOT.parent / 'public' / 'sfx-LICENSE.txt').write_bytes((SFX / 'LICENSE-kenney-CC0.txt').read_bytes())
+    print(f'sfx.json: {len(pack)} sounds')
