@@ -6,7 +6,7 @@ Missing source files are skipped: the game draws placeholders for anything absen
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 from scipy import ndimage
 
 ROOT = Path(__file__).resolve().parent
@@ -73,7 +73,7 @@ def save(img: Image.Image, name: str, jpg=False):
     print(f'  {name}.{"jpg" if jpg else "png"} {img.width}x{img.height}')
 
 
-def sheet(src: str, names: list[str], ref_index=0, ref_h=CHAR_H, same_scale=True, **kw):
+def sheet(src: str, names: list[str], ref_index=0, ref_h=CHAR_H, same_scale=True, blur=0.0, **kw):
     path = SRC / src
     if not path.exists():
         print(f'skip {src} (missing)')
@@ -83,7 +83,38 @@ def sheet(src: str, names: list[str], ref_index=0, ref_h=CHAR_H, same_scale=True
     k = ref_h / frames[ref_index].height
     for f, name in zip(frames, names):
         s = k if same_scale else ref_h / f.height
-        save(f.resize((max(1, round(f.width * s)), max(1, round(f.height * s))), Image.LANCZOS), name)
+        out = f.resize((max(1, round(f.width * s)), max(1, round(f.height * s))), Image.LANCZOS)
+        if blur:
+            pad = int(blur * 3)
+            canvas = Image.new('RGBA', (out.width + pad * 2, out.height + pad), (0, 0, 0, 0))
+            canvas.paste(out, (pad, pad))
+            out = canvas.filter(ImageFilter.GaussianBlur(blur))
+        save(out, name)
+
+
+def align_on_head(names: list[str]):
+    """Put animation frames on one canvas so the head (anchored at Kesha's beak) stays in the same spot."""
+    frames = [Image.open(OUT / f'{n}.png').convert('RGBA') for n in names if (OUT / f'{n}.png').exists()]
+    if len(frames) != len(names):
+        return
+    anchors = []
+    for f in frames:
+        a = np.asarray(f).astype(int)
+        # the orange beak is small and unique (the yellow face also appears on the wings)
+        beak = (a[:, :, 0] > 210) & (a[:, :, 1] > 100) & (a[:, :, 1] < 200) & (a[:, :, 2] < 90) & (a[:, :, 3] > 200)
+        beak[a.shape[0] * 2 // 3:] = False  # ignore anything low (feet, seeds)
+        ys, xs = np.nonzero(beak)
+        if len(xs) < 20:
+            return
+        anchors.append((int(xs.mean()), int(ys.mean())))
+    left = max(ax for ax, _ in anchors)
+    top = max(ay for _, ay in anchors)
+    right = max(f.width - ax for f, (ax, _) in zip(frames, anchors))
+    bottom = max(f.height - ay for f, (_, ay) in zip(frames, anchors))
+    for f, (ax, ay), n in zip(frames, anchors, names):
+        canvas = Image.new('RGBA', (left + right, top + bottom), (0, 0, 0, 0))
+        canvas.paste(f, (left - ax, top - ay), f)
+        save(canvas, n)
 
 
 def single(src: str, name: str, h: int):
@@ -92,8 +123,26 @@ def single(src: str, name: str, h: int):
         print(f'skip {src} (missing)')
         return
     im = Image.open(path).convert('RGBA')
-    im = im.crop(im.getbbox())
+    # crop to clearly visible pixels: faint shadow/noise alpha must not decide the bounds
+    solid = im.getchannel('A').point(lambda v: 255 if v > 40 else 0)
+    box = solid.getbbox()
+    if box:
+        im = im.crop(box)
     save(im.resize((round(im.width * h / im.height), h), Image.LANCZOS), name)
+
+
+def cover_crop(src: str, name: str, size: tuple[int, int], focus_y=0.5):
+    """Scale uniformly and crop to the target aspect (never stretch): focus_y picks which band is kept."""
+    path = SRC / src
+    if not path.exists():
+        print(f'skip {src} (missing)')
+        return
+    im = Image.open(path).convert('RGB')
+    k = max(size[0] / im.width, size[1] / im.height)
+    im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+    x = (im.width - size[0]) // 2
+    y = round((im.height - size[1]) * focus_y)
+    save(im.crop((x, y, x + size[0], y + size[1])), name, jpg=True)
 
 
 def opaque(src: str, name: str, size: tuple[int, int], jpg=False):
@@ -110,6 +159,7 @@ sheet('alice-a.png', ['alice-idle', 'alice-run1', 'alice-run2', 'alice-run3', 'a
 # alice-b was drawn at another size: scale it so the standing "shoot" pose matches the idle height.
 sheet('alice-b.png', ['alice-fall', 'alice-climb1', 'alice-climb2', 'alice-shoot', 'alice-shield', 'alice-hurt'], ref_index=3)
 sheet('kesha.png', ['kesha-fly1', 'kesha-fly2', 'kesha-blow'], min_share=0.004)
+align_on_head(['kesha-fly1', 'kesha-fly2', 'kesha-blow'])
 sheet('witch.png', ['witch-fly', 'witch-cast', 'witch-kind'], min_share=0.004)
 sheet('hedgehog.png', ['hedgehog1', 'hedgehog2'])
 sheet('mushroom.png', ['mushroom1', 'mushroom2', 'mushroom-flat'])
@@ -130,29 +180,125 @@ sheet('props2.png', ['crown', 'vine', 'spikes', 'door'], ref_h=240, same_scale=F
 # Tiles and backgrounds.
 for t in ['grass', 'dirt', 'stone', 'wood', 'rock', 'trunk']:
     opaque(f'tile-{t}.png', f'tile-{t}', (128, 128))
-def seamless_bg(src: str, name: str, h=720, overlap=0.18):
-    """Make a background tile horizontally: cross-fade its right edge into its left edge."""
+def make_tileable(a: np.ndarray) -> np.ndarray:
+    """Return a horizontally tileable version of an HxWxC array WITHOUT cross-fading.
+    A cross-fade stacks two half-transparent copies of trees/towers (ghosts), so:
+    if the picture already joins well (Codex drew it tileable) it is used as is;
+    an opaque far background gets a wide soft blend (it is blurred anyway);
+    a layer with transparency is mirrored (picture + flipped copy), which joins perfectly."""
+    alpha = a[:, :, 3:4] / 255 if a.shape[2] == 4 else 1
+    rgb = a[:, :, :3] * alpha
+    seam = np.abs(rgb[:, 0] - rgb[:, -1]).mean()
+    typical = np.abs(rgb[:, 1:] - rgb[:, :-1]).mean() + 1e-6
+    if seam / typical <= 3.2:
+        return a
+    if a.shape[2] == 3 or a[:, :, 3].min() > 250:
+        # opaque far background (sky, sun): mirroring would double the sun, so blend a wide edge instead;
+        # it is blurred and far away, the blend is invisible there
+        # pick the blend width whose two edge zones hold the least detail (plain sky rather than the sun)
+        lum = a[:, :, :3].mean(2)
+        detail = np.abs(np.diff(lum, axis=1)).mean(0)
+        detail = np.concatenate([detail, detail[-1:]])
+        W = a.shape[1]
+        best = None
+        for frac in np.arange(0.12, 0.36, 0.01):
+            o = int(W * frac)
+            cost = detail[:o].mean() + detail[W - o:].mean() - 0.5 * frac  # prefer wider when equal
+            if best is None or cost < best[0]:
+                best = (cost, o)
+        o = best[1]
+        w = W - o
+        out = a[:, :w].copy()
+        ramp = np.linspace(0, 1, o)[None, :, None]
+        out[:, :o] = a[:, w:w + o] * (1 - ramp) + a[:, :o] * ramp
+        return out
+    return np.concatenate([a, a[:, ::-1]], axis=1)
+
+
+def far_bg(src: str, name: str, h=1080, far=True, far_blur=3.2):
+    """Far background: ONE picture, never repeated (repeating doubled the sun and the big castle).
+    The game scales it a little wider than the screen and pans across it once over the whole level."""
     path = SRC / src
     if not path.exists():
         print(f'skip {src} (missing)')
         return
     im = Image.open(path).convert('RGB')
+    img = im.resize((round(im.width * h / im.height), h), Image.LANCZOS)
+    if far:
+        # far layer: a touch of blur, less saturation and a light haze so it sits behind the gameplay
+        img = img.filter(ImageFilter.GaussianBlur(far_blur))
+        img = ImageEnhance.Color(img).enhance(0.85)
+        haze = Image.new('RGB', img.size, tuple(int(c) for c in np.asarray(img)[: h // 5].reshape(-1, 3).mean(0)))
+        img = Image.blend(img, haze, 0.14)
+    save(img, name, jpg=True)
+
+
+def seamless_layer(src: str, name: str, h=720, blur=0.8, fade=0.0):
+    """Middle parallax layer (transparent sky): tile it horizontally like the backgrounds, keep alpha."""
+    path = SRC / src
+    if not path.exists():
+        print(f'skip {src} (missing)')
+        return
+    im = Image.open(path).convert('RGBA')
     im = im.resize((round(im.width * h / im.height), h), Image.LANCZOS)
-    a = np.asarray(im).astype(np.float32)
-    o = int(a.shape[1] * overlap)
-    w = a.shape[1] - o
-    out = a[:, :w].copy()
-    ramp = np.linspace(0, 1, o)[None, :, None]
-    # the first `o` columns fade in from the columns that follow the tile's right edge,
-    # so the right edge (column w-1) flows straight into column 0 when repeated
-    out[:, :o] = a[:, w:w + o] * (1 - ramp) + a[:, :o] * ramp
-    save(Image.fromarray(out.clip(0, 255).astype('uint8')), name, jpg=True)
+    out = make_tileable(np.asarray(im).astype(np.float32))
+    if fade:
+        # fade the top of the scenery into mist: trunks and walls must not end in a hard straight cut
+        rows = np.where(out[:, :, 3].mean(1) > 40)[0]
+        if len(rows):
+            top = rows[0]
+            span = max(1, int((h - top) * fade))
+            ramp = np.clip((np.arange(h) - top) / span, 0, 1) ** 1.5
+            out[:, :, 3] *= ramp[:, None]
+    img = Image.fromarray(out.clip(0, 255).astype('uint8'), 'RGBA').filter(ImageFilter.GaussianBlur(blur))
+    save(img, name)
+
+
+def texture(src: str, name: str, size: int, crop=None):
+    """Ground textures are kept big (hundreds of px per repeat) so pebbles, bricks and planks stay readable."""
+    path = SRC / src
+    if not path.exists():
+        print(f'skip {src} (missing)')
+        return
+    im = Image.open(path).convert('RGB')
+    if crop:
+        im = im.crop(crop(im))
+    k = size / im.height
+    save(im.resize((round(im.width * k), size), Image.LANCZOS), name, jpg=True)
 
 
 for b in ['meadow', 'forest', 'river', 'cave', 'castle']:
-    seamless_bg(f'bg-{b}.png', f'bg-{b}')
-opaque('title.png', 'title', (1280, 720), jpg=True)
-opaque('ending.png', 'ending', (1280, 720), jpg=True)
+    far_bg(f'bg-{b}.png', f'bg-{b}')
+for b in ['meadow', 'forest', 'river', 'cave', 'castle']:
+    # only the forest trunks are cut off at the top of the picture: fade them into mist
+    seamless_layer(f'mid-{b}.png', f'mid-{b}', blur=1.2, fade=0.45 if b == 'forest' else 0.0)
+
+texture('tile-dirt.png', 'ground-dirt', 384)
+texture('tile-stone.png', 'ground-stone', 320)
+texture('tile-rock.png', 'ground-rock', 384)
+texture('tile-wood.png', 'ground-wood', 256)
+# grass edge: the top band of the grass tile (grass + a little soil), laid along every ground top
+texture('tile-grass.png', 'ground-grass', 72, crop=lambda im: (0, 0, im.width, int(im.height * 0.34)))
+# bark: a vertical strip from the middle of the trunk texture, so a 44px trunk still shows real bark
+texture('tile-trunk.png', 'bark', 200, crop=lambda im: (int(im.width * 0.3), 0, int(im.width * 0.7), im.height))
+
+sheet('decor-nature.png', ['grass1', 'grass2', 'daisies', 'flowers', 'fern', 'rock', 'shrooms', 'reeds'], ref_h=96, same_scale=False)
+sheet('decor-dark.png', ['crystals1', 'crystals2', 'glowshrooms', 'stalagmite', 'torch', 'banner'], ref_h=96, same_scale=False)
+sheet('butterfly.png', ['butterfly1', 'butterfly2'], ref_h=64, same_scale=True)
+for b in ['meadow', 'forest', 'river', 'cave', 'castle']:
+    seamless_layer(f'near-{b}.png', f'near-{b}', blur=0)
+# foreground: soft focus, it passes right in front of the camera
+sheet('fg-nature.png', ['fg-grass', 'fg-leaves', 'fg-fern', 'fg-bush'], ref_h=260, same_scale=False, blur=3.5)
+sheet('fg-dark.png', ['fg-rock', 'fg-stalagmite', 'fg-pillar', 'fg-thorns'], ref_h=260, same_scale=False, blur=3.5)
+# painted interface
+single('ui-button.png', 'ui-button', 140)
+single('ui-panel.png', 'ui-panel', 420)
+single('ui-ribbon.png', 'ui-ribbon', 140)
+sheet('ui-round.png', ['ui-round-pink', 'ui-round-blue', 'ui-round-green', 'ui-round-lilac'], ref_h=200, same_scale=False)
+
+# 1280x800 keeps a little extra height for 4:3 screens; the game crops it with a uniform cover scale
+cover_crop('title.png', 'title', (1280, 800), focus_y=0.35)
+cover_crop('ending.png', 'ending', (1280, 800), focus_y=0.3)
 
 # Home-screen icon from the idle Alice frame.
 idle = OUT / 'alice-idle.png'

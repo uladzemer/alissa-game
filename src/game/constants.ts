@@ -7,6 +7,12 @@ export function viewW(scene: { scale: { width: number } }) {
   return scene.scale.width;
 }
 
+/** Phones and small tablets get fewer particles; everything else looks the same. */
+export const LOW_POWER =
+  typeof navigator !== 'undefined' &&
+  (navigator.maxTouchPoints > 0 || /Android|iPhone|iPad/i.test(navigator.userAgent)) &&
+  ((navigator.hardwareConcurrency ?? 4) <= 6 || ((navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 4) <= 4);
+
 export const FONT = '"Nunito", "Trebuchet MS", "Arial Rounded MT Bold", system-ui, sans-serif';
 
 export const PHYS = {

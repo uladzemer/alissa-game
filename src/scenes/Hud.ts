@@ -2,8 +2,9 @@ import Phaser from 'phaser';
 import { GAME_W, GAME_H, PLAYER, titleStyle, viewW } from '../game/constants';
 import { touch, isTouchDevice } from '../game/controls';
 import { load } from '../game/save';
-import { sfx, toggleMute, isMuted } from '../game/sfx';
+import { toggleMute, isMuted } from '../game/sfx';
 import type { LevelScene } from './Level';
+import { paintedButton, paintedPanel, roundPlate, PlateColor } from '../game/ui';
 
 interface Btn { name: 'jump' | 'shoot' | 'shield' | 'kesha'; x: number; y: number; r: number; g: Phaser.GameObjects.Container }
 
@@ -61,8 +62,8 @@ export class HudScene extends Phaser.Scene {
     this.bossBar = this.add.graphics();
     this.bossLabel = this.add.text(viewW(this) / 2, 92, 'Колдунья', titleStyle(24, '#e3b5ff')).setOrigin(0.5).setVisible(false);
 
-    const pause = this.add.circle(this.R(GAME_W - 52), 48, 34, 0xffffff, 0.8).setStrokeStyle(4, 0xff7eb6).setInteractive({ useHandCursor: true });
-    this.add.text(this.R(GAME_W - 52), 48, 'II', titleStyle(30, '#ff5fa8', '#ffffff')).setOrigin(0.5);
+    const pause = roundPlate(this, this.R(GAME_W - 52), 48, 36, 'pink').setInteractive({ useHandCursor: true });
+    this.add.text(this.R(GAME_W - 52), 46, 'II', titleStyle(30, '#ffffff', '#b8326f')).setOrigin(0.5);
     pause.on('pointerdown', () => this.level.togglePause());
 
     this.showTouch = isTouchDevice();
@@ -108,19 +109,19 @@ export class HudScene extends Phaser.Scene {
     arrow(0, 1);
     this.padKnob = this.add.circle(PAD.x, PAD.y, 46, 0xff7eb6, 0.6).setStrokeStyle(4, 0xffffff);
 
-    const mk = (name: Btn['name'], x: number, y: number, r: number, color: number, icon: string, label: string) => {
+    const mk = (name: Btn['name'], x: number, y: number, r: number, color: PlateColor, icon: string, label: string) => {
       const g = this.add.container(x, y);
-      g.add(this.add.circle(0, 0, r, color, 0.55).setStrokeStyle(5, 0xffffff, 0.9));
+      g.add(roundPlate(this, 0, 0, r, color));
       if (icon) g.add(this.add.image(0, -8, icon).setScale((r * 0.9) / 200));
       g.add(this.add.text(0, r * 0.62, label, titleStyle(20)).setOrigin(0.5));
-      g.setAlpha(0.85);
+      g.setAlpha(0.9);
       this.buttons.push({ name, x, y, r, g });
     };
-    mk('jump', this.R(1150), 600, 92, 0x5fb8ff, 'alice-jump', 'Прыжок');
-    mk('shoot', this.R(960), 640, 72, 0xff5fa8, '', 'Сердечко');
+    mk('jump', this.R(1150), 600, 92, 'blue', 'alice-jump', 'Прыжок');
+    mk('shoot', this.R(960), 640, 72, 'pink', '', 'Сердечко');
     this.buttons[1].g.add(this.add.image(0, -10, 'heart').setScale(60 / 144));
-    mk('shield', this.R(985), 470, 60, 0x7ad0ff, 'alice-shield', 'Щит');
-    mk('kesha', this.R(1170), 400, 62, 0x6fd36f, '', 'Кеша');
+    mk('shield', this.R(985), 470, 60, 'lilac', 'alice-shield', 'Щит');
+    mk('kesha', this.R(1170), 400, 62, 'green', '', 'Кеша');
     this.children.bringToTop(this.keshaRing);
     this.children.bringToTop(this.keshaIcon);
   }
@@ -200,22 +201,19 @@ export class HudScene extends Phaser.Scene {
     this.clearTouch();
     const c = this.add.container(0, 0).setDepth(500);
     c.add(this.add.rectangle(viewW(this) / 2, GAME_H / 2, viewW(this), GAME_H, 0x2a1840, 0.6).setInteractive());
-    c.add(this.add.text(viewW(this) / 2, 170, 'Пауза', titleStyle(64)).setOrigin(0.5));
+    c.add(paintedPanel(this, viewW(this) / 2, GAME_H / 2 + 10, 620, 560));
+    c.add(this.add.text(viewW(this) / 2, 150, 'Пауза', titleStyle(60)).setOrigin(0.5));
     const button = (y: number, label: string, cb: () => void) => {
-      const t = this.add.text(viewW(this) / 2, y, label, titleStyle(40)).setOrigin(0.5).setPadding(24, 10, 24, 10).setBackgroundColor('#ff7eb6');
-      t.setInteractive({ useHandCursor: true }).on('pointerup', () => {
-        sfx.click();
-        cb();
-      });
-      c.add(t);
-      return t;
+      const b = paintedButton(this, viewW(this) / 2, y, label, 36, cb, 440);
+      c.add(b);
+      return b.list[b.list.length - 1] as Phaser.GameObjects.Text;
     };
-    button(300, 'Продолжить', () => this.closePause());
-    button(400, 'Выбрать мир', () => {
+    button(275, 'Продолжить', () => this.closePause());
+    button(390, 'Выбрать мир', () => {
       this.closePause();
       this.level.scene.start('Map');
     });
-    const snd = button(500, isMuted() ? 'Звук: выкл' : 'Звук: вкл', () => snd.setText(toggleMute() ? 'Звук: выкл' : 'Звук: вкл'));
+    const snd = button(505, isMuted() ? 'Звук: выкл' : 'Звук: вкл', () => snd.setText(toggleMute() ? 'Звук: выкл' : 'Звук: вкл'));
     this.pauseLayer = c;
     // listen for ESC from the next frame on: the press that opened the pause is still being dispatched
     this.time.delayedCall(60, () => this.input.keyboard?.once('keydown-ESC', this.escClose));

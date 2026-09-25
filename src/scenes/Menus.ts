@@ -5,6 +5,7 @@ import { LEVELS } from '../game/levels';
 import { load, save } from '../game/save';
 import { sfx, unlockAudio, playMusic, stopMusic } from '../game/sfx';
 import { isTouchDevice } from '../game/controls';
+import { paintedButton, paintedPanel, ribbon, roundPlate } from '../game/ui';
 
 /** Menus are laid out for 1280x720; on wider screens the camera keeps that layout centred. */
 const leaving = new WeakSet<Phaser.Scene>();
@@ -37,13 +38,7 @@ function cover(scene: Phaser.Scene, key: string) {
 }
 
 function button(scene: Phaser.Scene, x: number, y: number, label: string, size: number, cb: () => void) {
-  const t = scene.add.text(x, y, label, titleStyle(size)).setOrigin(0.5).setPadding(28, 12, 28, 12).setBackgroundColor('#ff7eb6');
-  t.setInteractive({ useHandCursor: true });
-  t.on('pointerup', () => {
-    sfx.click();
-    cb();
-  });
-  return t;
+  return paintedButton(scene, x, y, label, size, cb);
 }
 
 function goFullscreen(scene: Phaser.Scene) {
@@ -89,10 +84,12 @@ export class TitleScene extends Phaser.Scene {
 
   create() {
     cover(this, 'title');
-    const logo = this.add.text(GAME_W / 2, 130, 'Приключения\nАлисы', titleStyle(92, '#ffffff', '#d6337f')).setOrigin(0.5);
+    const logo = this.add.text(GAME_W / 2, 74, 'Приключения Алисы', titleStyle(72, '#ffffff', '#d6337f')).setOrigin(0.5);
+    ribbon(this, GAME_W / 2, 84, logo.width + 300, 0);
+    this.children.bringToTop(logo);
     logo.setShadow(0, 6, '#6b2a5c', 8, true, true);
     this.tweens.add({ targets: logo, scale: 1.04, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut' });
-    const play = button(this, GAME_W / 2, GAME_H - 130, '▶  Играть', 56, () => this.start());
+    const play = button(this, GAME_W * 0.72, GAME_H * 0.63, '▶  Играть', 56, () => this.start());
     this.tweens.add({ targets: play, scale: 1.08, yoyo: true, repeat: -1, duration: 700 });
     this.add
       .text(GAME_W / 2, GAME_H - 40, isTouchDevice() ? 'Кнопки на экране: слева — ходить, справа — прыгать и стрелять' : 'Стрелки — бег  •  Пробел — прыжок  •  X — сердечки  •  Z — щит  •  C — Кеша', titleStyle(22))
@@ -113,10 +110,10 @@ export class TitleScene extends Phaser.Scene {
 }
 
 const STORY = [
-  { who: 'king', text: 'Беда, Алиса! Злая колдунья заколдовала\nпринца и заперла его в высокой башне!' },
-  { who: 'witch-fly', text: 'Башню закрывают пять волшебных замков.\nОткрыть их могут только кристаллы-ключи.' },
-  { who: 'kesha-blow', text: 'Попугай Кеша полетит с тобой!\nОн дует кормом через трубочку во всех врагов.' },
-  { who: 'alice-jump', text: 'Твои сердечки делают злых добрыми.\nВперёд, Алиса, спаси принца!' },
+  { who: 'king', text: 'Беда, Алиса! Злая колдунья заколдовала принца и заперла его в высокой башне!' },
+  { who: 'witch-fly', text: 'Башню закрывают пять волшебных замков. Открыть их могут только кристаллы-ключи.' },
+  { who: 'kesha-blow', text: 'Попугай Кеша полетит с тобой! Он дует кормом через трубочку во всех врагов.' },
+  { who: 'alice-jump', text: 'Твои сердечки делают злых добрыми. Вперёд, Алиса, спаси принца!' },
 ];
 
 export class StoryScene extends Phaser.Scene {
@@ -128,7 +125,7 @@ export class StoryScene extends Phaser.Scene {
 
   create() {
     this.page = 0;
-    cover(this, 'bg-castle').setTint(0xd8c8ff);
+    cover(this, 'bg-castle').setTint(0xc8b8ee);
     this.cameras.main.fadeIn(300);
     this.show();
     this.input.on('pointerup', () => this.next());
@@ -142,13 +139,17 @@ export class StoryScene extends Phaser.Scene {
     this.layer?.destroy();
     const s = STORY[this.page];
     const c = this.add.container(0, 0);
-    const img = this.add.image(290, GAME_H / 2 + 40, s.who);
-    img.setScale(360 / img.height);
-    if (s.who === 'witch-fly') img.setScale(300 / img.height);
+    // hero on the left, text card on the right: they never overlap
+    const img = this.add.image(250, GAME_H / 2 + 30, s.who);
+    img.setScale(Math.min(380 / img.height, 330 / img.width));
+    c.add(this.add.image(250, GAME_H / 2 + 30 + img.displayHeight / 2, 'shadow').setDisplaySize(260, 40).setAlpha(0.8));
     c.add(img);
-    c.add(this.add.rectangle(810, GAME_H / 2, 820, 260, 0xffffff, 0.92).setStrokeStyle(6, 0xff7eb6));
-    c.add(this.add.text(810, GAME_H / 2, s.text, { ...titleStyle(34, '#6b2a5c', '#ffffff'), strokeThickness: 0 }).setOrigin(0.5));
-    c.add(this.add.text(810, GAME_H / 2 + 170, 'нажми, чтобы продолжить ▶', titleStyle(24)).setOrigin(0.5));
+    const box = { x: 470, y: GAME_H / 2 - 150, w: 760, h: 300 };
+    c.add(paintedPanel(this, box.x + box.w / 2, box.y + box.h / 2, box.w, box.h));
+    const text = this.add.text(box.x + box.w / 2, box.y + box.h / 2, s.text, { ...titleStyle(34, '#6b2a5c', '#ffffff'), strokeThickness: 0 });
+    text.setOrigin(0.5).setWordWrapWidth(box.w - 70).setLineSpacing(6);
+    c.add(text);
+    c.add(this.add.text(box.x + box.w / 2, box.y + box.h + 50, 'нажми, чтобы продолжить ▶', titleStyle(24)).setOrigin(0.5));
     this.tweens.add({ targets: img, y: img.y - 12, yoyo: true, repeat: -1, duration: 900, ease: 'Sine.easeInOut' });
     this.layer = c;
   }
@@ -200,7 +201,8 @@ export class MapScene extends Phaser.Scene {
     LEVELS.forEach((lv, i) => {
       const { x, y } = NODE_POS[i];
       const open = i < data.unlocked;
-      const circle = this.add.circle(x, y, 70, open ? 0xffffff : 0x8a8a9a, 0.95).setStrokeStyle(8, open ? 0xff7eb6 : 0x55556a);
+      const circle = roundPlate(this, x, y, 78, open ? 'pink' : 'lilac');
+      if (!open) circle.setAlpha(0.7);
       const icon = this.add.image(x, y - 4, NODE_ICON[i]);
       icon.setScale(96 / Math.max(icon.width, icon.height));
       if (!open) icon.setTint(0x333344);
@@ -260,16 +262,19 @@ export class EndingScene extends Phaser.Scene {
     this.cameras.main.fadeIn(800, 255, 220, 240);
     sfx.win();
     playMusic('title');
-    const t = this.add.text(GAME_W / 2, 90, 'Ура! Алиса спасла принца!', titleStyle(64, '#ffffff', '#d6337f')).setOrigin(0.5);
-    this.tweens.add({ targets: t, scale: 1.05, yoyo: true, repeat: -1, duration: 800 });
-    this.add.rectangle(GAME_W / 2, 172, 900, 84, 0x6b2a5c, 0.55);
+    // all captions sit in a band at the bottom, over legs and flowers, so no face is covered
+    this.add.rectangle(GAME_W / 2, GAME_H - 32, viewW(this) + 20, 64, 0x6b2a5c, 0.6).setDepth(5);
+    ribbon(this, GAME_W / 2 + 90, GAME_H - 150, 860, 0).setDepth(5);
+    const t = this.add.text(GAME_W / 2 + 90, GAME_H - 158, 'Ура! Алиса спасла принца!', titleStyle(50, '#ffffff', '#d6337f')).setOrigin(0.5).setDepth(6);
+    this.tweens.add({ targets: t, scale: 1.04, yoyo: true, repeat: -1, duration: 800 });
     this.add
-      .text(GAME_W / 2, 170, `Король устроил праздник, а колдунья теперь печёт пироги.\nСобрано звёздочек: ${load().stars}`, titleStyle(28))
-      .setOrigin(0.5);
+      .text(GAME_W / 2 + 90, GAME_H - 32, `Король устроил праздник, а колдунья теперь печёт пироги.  ★ ${load().stars}`, titleStyle(24))
+      .setOrigin(0.5)
+      .setDepth(6);
     for (let i = 0; i < 24; i++) {
-      const h = this.add.image(Phaser.Math.Between(0, GAME_W), GAME_H + 40, i % 3 ? 'heart' : 'star').setScale(0.2 + Math.random() * 0.15);
+      const h = this.add.image(Phaser.Math.Between(0, GAME_W), GAME_H + 40, i % 3 ? 'heart' : 'star').setScale(0.2 + Math.random() * 0.15).setDepth(1);
       this.tweens.add({ targets: h, y: -60, x: h.x + Phaser.Math.Between(-80, 80), duration: 4000 + Math.random() * 3000, delay: Math.random() * 3000, repeat: -1 });
     }
-    button(this, GAME_W / 2, GAME_H - 70, 'Играть ещё', 44, () => this.scene.start('Map'));
+    button(this, 130, GAME_H - 150, 'Ещё раз', 32, () => this.scene.start('Map')).setDepth(7);
   }
 }

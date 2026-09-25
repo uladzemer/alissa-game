@@ -1,9 +1,11 @@
 import Phaser from 'phaser';
-import { GAME_H, TILE, PLAYER, titleStyle, viewW } from '../game/constants';
+import { GAME_H, TILE, PLAYER, titleStyle, viewW, LOW_POWER } from '../game/constants';
 import { LEVELS, LevelDef } from '../game/levels';
 import { Player } from '../game/player';
 import { Enemy, ENEMY_CHARS, Witch } from '../game/enemies';
 import { Keyboard, InputState, blank } from '../game/controls';
+import { hasArt } from '../game/assets';
+import { paintedButton, paintedPanel, ribbon } from '../game/ui';
 import { sfx, playMusic, stopMusic } from '../game/sfx';
 import { load, save } from '../game/save';
 
@@ -11,7 +13,7 @@ type StaticBody = Phaser.Physics.Arcade.StaticBody;
 type Body = Phaser.Physics.Arcade.Body;
 
 interface Pickup { img: Phaser.GameObjects.Image; kind: 'star' | 'strawberry' | 'crystal'; taken: boolean; baseY: number }
-interface Mover { zone: Phaser.GameObjects.Zone; view: Phaser.GameObjects.Image; x0: number; y0: number; axis: 'x' | 'y'; range: number; period: number; phase: number }
+interface Mover { zone: Phaser.GameObjects.Zone; view: Phaser.GameObjects.Image | Phaser.GameObjects.TileSprite; x0: number; y0: number; axis: 'x' | 'y'; range: number; period: number; phase: number; lift: number }
 interface Faller { zone: Phaser.GameObjects.Zone; view: Phaser.GameObjects.Image; x0: number; y0: number; state: 'still' | 'shake' | 'fall'; timer: number }
 interface Shot { img: Phaser.GameObjects.Image; vx: number; vy: number; life: number; kind: 'heart' | 'orb' }
 interface Seed { img: Phaser.GameObjects.Image; target: Enemy | Witch }
@@ -42,13 +44,25 @@ export class LevelScene extends Phaser.Scene {
   finished = false;
 
   private kb!: Keyboard;
-  private bg!: Phaser.GameObjects.TileSprite;
+  private bg!: Phaser.GameObjects.Image;
   private kesha!: Phaser.GameObjects.Image;
   private keshaBlowUntil = 0;
   private checkpoint = new Phaser.Math.Vector2();
   private prevInput: InputState = blank();
   private arenaWall: Phaser.GameObjects.Zone | null = null;
   private waterTop: number[] = [];
+  private waves: Phaser.GameObjects.TileSprite[] = [];
+  private mid: Phaser.GameObjects.TileSprite | null = null;
+  private near: Phaser.GameObjects.TileSprite | null = null;
+  /** Static scenery (ground, decor, water): hidden while off-screen so the GPU only draws what is visible. */
+  private statics: { obj: Phaser.GameObjects.Components.Visible; rect: Phaser.Geom.Rectangle }[] = [];
+  private cullTick = 0;
+  private fg: Phaser.GameObjects.Image[] = [];
+  private rays: Phaser.GameObjects.Image[] = [];
+  private vignette!: Phaser.GameObjects.Image;
+  private motes: { img: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; par: number; phase: number; flutter?: boolean }[] = [];
+  private lastCam = new Phaser.Math.Vector2();
+  private shadow!: Phaser.GameObjects.Image;
 
   constructor() {
     super('Level');
@@ -72,6 +86,13 @@ export class LevelScene extends Phaser.Scene {
     this.keshaReadyAt = 0;
     this.prevInput = blank();
     this.respawning = false;
+    this.waves = [];
+    this.mid = null;
+    this.near = null;
+    this.statics = [];
+    this.fg = [];
+    this.rays = [];
+    this.motes = [];
   }
 
   create() {
@@ -86,12 +107,31 @@ export class LevelScene extends Phaser.Scene {
     this.physics.world.setBoundsCollision(true, true, false, false);
 
     const bgKey = `bg-${this.def.world}`;
-    const bgSrc = this.textures.get(bgKey).getSourceImage() as { height: number };
-    this.bg = this.add.tileSprite(0, 0, viewW(this) + 4, GAME_H, bgKey).setOrigin(0).setScrollFactor(0).setDepth(-20);
-    this.bg.setTileScale(GAME_H / bgSrc.height);
+    const bgSrc = this.textures.get(bgKey).getSourceImage() as { width: number; height: number };
+    // far background: one picture, a bit wider than the screen, panned once across the level (never repeated)
+    this.bg = this.add.image(0, 0, bgKey).setOrigin(0).setScrollFactor(0).setDepth(-20);
+    this.fitFarBackground(bgSrc);
+    const midKey = `mid-${this.def.world}`;
+    if (hasArt(this, midKey)) {
+      const midSrc = this.textures.get(midKey).getSourceImage() as { height: number };
+      this.mid = this.add.tileSprite(0, 0, viewW(this) + 4, GAME_H, midKey).setOrigin(0).setScrollFactor(0).setDepth(-15);
+      this.mid.setTileScale(GAME_H / midSrc.height);
+    }
+    const nearKey = `near-${this.def.world}`;
+    if (hasArt(this, nearKey)) {
+      const nearSrc = this.textures.get(nearKey).getSourceImage() as { height: number };
+      this.near = this.add.tileSprite(0, 0, viewW(this) + 4, GAME_H, nearKey).setOrigin(0).setScrollFactor(0).setDepth(-8);
+      this.near.setTileScale(GAME_H / nearSrc.height);
+    }
 
     this.solids = this.physics.add.staticGroup();
+    const firstStatic = this.children.list.length;
     this.buildTerrain();
+    for (const obj of this.children.list.slice(firstStatic)) {
+      const o = obj as Phaser.GameObjects.GameObject & Partial<Phaser.GameObjects.Components.GetBounds> & Phaser.GameObjects.Components.Visible;
+      if (typeof o.getBounds === 'function' && typeof o.setVisible === 'function') this.statics.push({ obj: o, rect: o.getBounds() });
+    }
+    this.addForeground();
     this.spawnThings();
 
     const cam = this.cameras.main;
@@ -100,7 +140,11 @@ export class LevelScene extends Phaser.Scene {
     cam.setDeadzone(80, 120);
     cam.fadeIn(400);
     const onResize = () => {
-      this.bg.setSize(viewW(this) + 4, GAME_H);
+      this.fitFarBackground(this.textures.get(this.bg.texture.key).getSourceImage() as { width: number; height: number });
+      this.mid?.setSize(viewW(this) + 4, GAME_H);
+      this.near?.setSize(viewW(this) + 4, GAME_H);
+      this.vignette.setDisplaySize(viewW(this), GAME_H);
+      this.rays.forEach((r, i) => (r.x = viewW(this) * (0.15 + i * 0.25)));
       // phone turned upright: the "turn your phone" screen covers the game, so stop the action
       if (this.scale.height > this.scale.width && this.scene.isActive()) this.togglePause();
     };
@@ -117,12 +161,14 @@ export class LevelScene extends Phaser.Scene {
       stopMusic();
     });
     playMusic(this.def.world);
+    this.setupAtmosphere();
 
-    const banner = this.add
-      .text(viewW(this) / 2, GAME_H * 0.3, `${this.def.name}\n${this.def.goal}`, titleStyle(46))
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(100);
+    // level title on a ribbon, so it never blends into the picture behind it
+    const banner = this.add.container(viewW(this) / 2, GAME_H * 0.3).setScrollFactor(0).setDepth(100);
+    const bannerText = this.add.text(0, -8, this.def.name, titleStyle(44, '#ffffff', '#b8326f')).setOrigin(0.5);
+    banner.add(ribbon(this, 0, 0, Math.max(640, bannerText.width + 300), 0));
+    banner.add(bannerText);
+    banner.add(this.add.text(0, 92, this.def.goal, titleStyle(32)).setOrigin(0.5));
     this.tweens.add({ targets: banner, alpha: 0, delay: 2200, duration: 600, onComplete: () => banner.destroy() });
   }
 
@@ -141,7 +187,7 @@ export class LevelScene extends Phaser.Scene {
 
   floorAt(x: number, y: number) {
     const c = this.cell(x, y);
-    return SOLID.has(c) || ONE_WAY.has(c) || this.movers.some((m) => m.zone.getBounds().contains(x, y));
+    return SOLID.has(c) || ONE_WAY.has(c) || this.movers.some((m) => m.zone.getBounds().contains(x, y)) || this.fallers.some((f) => f.state !== 'fall' && f.zone.getBounds().contains(x, y));
   }
 
   hazardAt(x: number, y: number) {
@@ -161,30 +207,68 @@ export class LevelScene extends Phaser.Scene {
   private buildTerrain() {
     const g = this.grid;
     const tex = this.def.ground;
-    // visuals
+    // ground: one big continuous texture over every run of '#', aligned to the world so neighbouring runs join
+    const groundKey = tex === 'grass' ? 'ground-dirt' : `ground-${tex}`;
+    this.runs('#', (x1, x2, y) => {
+      const ts = this.add.tileSprite(x1 * TILE, y * TILE, (x2 - x1 + 1) * TILE, TILE, groundKey).setOrigin(0);
+      ts.setTilePosition(x1 * TILE, y * TILE);
+    });
+    const isSolid = (x: number, y: number) => y >= 0 && y < this.rows && x >= 0 && x < this.cols && g[y][x] === '#';
+    // top edges: a grass strip (or a light stone ledge) and a soft shadow under it
+    this.runsWhere((x, y) => y > 0 && isSolid(x, y) && !isSolid(x, y - 1), (x1, x2, y) => {
+      const w = (x2 - x1 + 1) * TILE;
+      const top = y * TILE;
+      this.add.image(x1 * TILE, top + (tex === 'grass' ? 34 : 10), 'shade').setOrigin(0).setDisplaySize(w, 46).setDepth(0.5);
+      if (tex === 'grass') {
+        const edge = this.add.tileSprite(x1 * TILE - 6, top - 12, w + 12, 58, 'ground-grass').setOrigin(0).setDepth(0.6);
+        edge.setTileScale(58 / 72);
+        edge.setTilePosition((x1 * TILE - 6) / (58 / 72), 0);
+      } else {
+        this.add.rectangle(x1 * TILE, top, w, 5, 0xffffff, 0.28).setOrigin(0).setDepth(0.6);
+        this.add.rectangle(x1 * TILE, top + 5, w, 3, 0x1a1030, 0.25).setOrigin(0).setDepth(0.6);
+      }
+    });
+    // exposed sides and undersides get a soft dark edge so blocks read as solid shapes
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        if (!isSolid(x, y)) continue;
+        if (x > 0 && !isSolid(x - 1, y)) this.add.image(x * TILE, y * TILE, 'side').setOrigin(0).setDisplaySize(26, TILE).setDepth(0.5);
+        if (x < this.cols - 1 && !isSolid(x + 1, y)) this.add.image((x + 1) * TILE, y * TILE, 'side').setOrigin(1, 0).setFlipX(true).setDisplaySize(26, TILE).setDepth(0.5);
+        if (y < this.rows - 1 && !isSolid(x, y + 1) && g[y + 1][x] !== '~') this.add.image(x * TILE, (y + 1) * TILE, 'shade').setOrigin(0, 1).setFlipY(true).setDisplaySize(TILE, 30).setDepth(0.5);
+      }
+    }
+    // wooden platforms: real planks at a readable size, with an outline
+    this.runs('=', (x1, x2, y) => {
+      const w = (x2 - x1 + 1) * TILE;
+      const plank = this.add.tileSprite(x1 * TILE, y * TILE, w, 28, 'ground-wood').setOrigin(0).setDepth(1);
+      plank.setTilePosition(x1 * TILE, 40);
+      const o = this.add.graphics().setDepth(1.1);
+      o.lineStyle(3, 0x4a2a14, 0.9).strokeRoundedRect(x1 * TILE + 1, y * TILE + 1, w - 2, 26, 6);
+      o.fillStyle(0xffffff, 0.18).fillRect(x1 * TILE + 4, y * TILE + 3, w - 8, 3);
+      this.add.image(x1 * TILE, y * TILE + 28, 'shade').setOrigin(0).setDisplaySize(w, 18).setDepth(0.9).setAlpha(0.6);
+    });
     for (let y = 0; y < this.rows; y++) {
       for (let x = 0; x < this.cols; x++) {
         const c = g[y][x];
-        const px = x * TILE;
-        const py = y * TILE;
-        if (c === '#') {
-          const top = y === 0 || g[y - 1][x] !== '#';
-          const key = tex === 'grass' ? (top ? 'tile-grass' : 'tile-dirt') : `tile-${tex}`;
-          const img = this.add.image(px, py, key).setOrigin(0).setDisplaySize(TILE + 1, TILE + 1);
-          if (tex !== 'grass' && !top) img.setTint(0xcfc8dc);
-        } else if (c === '=') {
-          this.add.image(px, py, 'tile-wood').setOrigin(0).setDisplaySize(TILE + 1, 26).setDepth(1);
-        } else if (c === 'T') {
-          this.add.image(px + TILE / 2, py, 'tile-trunk').setOrigin(0.5, 0).setDisplaySize(40, TILE + 1).setDepth(-5);
-        } else if (c === '^') {
-          this.add.image(px, py + TILE, 'spikes').setOrigin(0, 1).setDisplaySize(TILE, 40).setDepth(2);
+        if (c === 'T' && (y === 0 || g[y - 1][x] !== 'T')) {
+          let y2 = y;
+          while (y2 + 1 < this.rows && g[y2 + 1][x] === 'T') y2++;
+          const bark = this.add.tileSprite(x * TILE + TILE / 2, y * TILE, 46, (y2 - y + 1) * TILE + 1, 'bark').setOrigin(0.5, 0).setDepth(-5);
+          bark.setTileScale(46 / 80);
         }
       }
     }
+    this.runs('^', (x1, x2, y) => {
+      const src = this.textures.get('spikes').getSourceImage() as { height: number };
+      const sp = this.add.tileSprite(x1 * TILE, (y + 1) * TILE + 2, (x2 - x1 + 1) * TILE, 42, 'spikes').setOrigin(0, 1).setDepth(2);
+      sp.setTileScale(42 / src.height);
+    });
+    this.placeDecor(isSolid);
     // crowns (runs of O) and vines (runs of |)
     this.runs('O', (x1, x2, y) => {
       const w = (x2 - x1 + 1) * TILE;
-      this.add.image(x1 * TILE + w / 2, y * TILE - 26, 'crown').setOrigin(0.5, 0).setDisplaySize(w + 70, 150).setDepth(-4);
+      const crown = this.add.image(x1 * TILE + w / 2, y * TILE - 30, 'crown').setOrigin(0.5, 0).setDepth(-4);
+      crown.setScale((w + 70) / crown.width);
     });
     for (let x = 0; x < this.cols; x++) {
       let y = 0;
@@ -192,30 +276,35 @@ export class LevelScene extends Phaser.Scene {
         if (g[y][x] === '|') {
           const y1 = y;
           while (y < this.rows && g[y][x] === '|') y++;
-          this.add.image((x + 0.5) * TILE, y1 * TILE - 10, 'vine').setOrigin(0.5, 0).setDisplaySize(44, (y - y1) * TILE + 10).setDepth(-5);
+          const vsrc = this.textures.get('vine').getSourceImage() as { width: number };
+          const vine = this.add.tileSprite((x + 0.5) * TILE, y1 * TILE - 10, 44, (y - y1) * TILE + 10, 'vine').setOrigin(0.5, 0).setDepth(-5);
+          vine.setTileScale(44 / vsrc.width);
         } else y++;
       }
     }
-    // water
-    const waterCols = new Map<number, number>();
+    // water: the surface sits just under the islands' grass, so lily pads, rafts and logs float on it
     for (let x = 0; x < this.cols; x++) {
       this.waterTop[x] = -1;
       for (let y = 0; y < this.rows; y++) {
         if (g[y][x] === '~' || g[y][x] === 'x') {
           this.waterTop[x] = y;
-          waterCols.set(x, y);
           break;
         }
       }
     }
-    if (waterCols.size) {
-      const water = this.add.graphics().setDepth(25);
-      water.fillStyle(0x3fa9f5, 0.72);
-      for (const [x, y] of waterCols) water.fillRect(x * TILE, y * TILE + 14, TILE + 1, (this.rows - y) * TILE);
-      water.fillStyle(0xbfe9ff, 0.9);
-      for (const [x, y] of waterCols) for (let i = 0; i < 2; i++) water.fillEllipse(x * TILE + 16 + i * 32, y * TILE + 16, 30, 10);
-      this.tweens.add({ targets: water, y: 5, yoyo: true, repeat: -1, duration: 1200, ease: 'Sine.easeInOut' });
-    }
+    this.runsWhere((x, y) => this.waterTop[x] === y, (x1, x2, y) => {
+      const w = (x2 - x1 + 1) * TILE;
+      const surface = this.waterSurface(y);
+      const depth = (this.rows - y + 1) * TILE;
+      this.add.rectangle(x1 * TILE, surface, w, depth, 0x2f86d6, 0.78).setOrigin(0).setDepth(25);
+      this.add.rectangle(x1 * TILE, surface, w, 30, 0x6cc6ff, 0.55).setOrigin(0).setDepth(25);
+      const foam = this.add.tileSprite(x1 * TILE, surface - 6, w, 16, 'wave').setOrigin(0).setDepth(25.5).setAlpha(0.85);
+      this.waves.push(foam);
+      for (let i = 0; i < Math.ceil(w / 90); i++) {
+        const sp = this.add.image(x1 * TILE + Math.random() * w, surface + 10 + Math.random() * 60, 'glow').setDepth(25.6).setScale(0.18).setBlendMode(Phaser.BlendModes.ADD);
+        this.tweens.add({ targets: sp, alpha: { from: 0, to: 0.9 }, yoyo: true, repeat: -1, duration: 700 + Math.random() * 900, delay: Math.random() * 1500 });
+      }
+    });
 
     // colliders: merge solid cells into rectangles (rows, then stack equal rows)
     const rects: { x1: number; x2: number; y1: number; y2: number; oneWay: boolean }[] = [];
@@ -268,6 +357,56 @@ export class LevelScene extends Phaser.Scene {
     }
   }
 
+  private runsWhere(test: (x: number, y: number) => boolean, fn: (x1: number, x2: number, y: number) => void) {
+    for (let y = 0; y < this.rows; y++) {
+      let x = 0;
+      while (x < this.cols) {
+        if (!test(x, y)) {
+          x++;
+          continue;
+        }
+        const x1 = x;
+        while (x < this.cols && test(x, y)) x++;
+        fn(x1, x - 1, y);
+      }
+    }
+  }
+
+  /** Water surface y for a column whose first water row is `row`. */
+  waterSurface(row: number) {
+    return (row - 1) * TILE + 22;
+  }
+
+  /** Grass, flowers, ferns or crystals on the ground tops: picked by a fixed hash, so a level always looks the same. */
+  private placeDecor(isSolid: (x: number, y: number) => boolean) {
+    const sets: Record<string, string[]> = {
+      meadow: ['grass1', 'grass2', 'daisies', 'flowers', 'grass1', 'rock', 'shrooms', 'flowers'],
+      forest: ['fern', 'grass2', 'shrooms', 'fern', 'rock', 'grass1', 'glowshrooms'],
+      river: ['reeds', 'grass1', 'grass2', 'flowers', 'reeds', 'rock', 'daisies'],
+      cave: ['crystals1', 'crystals2', 'glowshrooms', 'stalagmite', 'crystals1'],
+      castle: ['torch', 'banner', 'rock', 'torch'],
+    };
+    const keys = (sets[this.def.world] ?? []).filter((k) => hasArt(this, k));
+    if (!keys.length) return;
+    const busy = new Set(['@', 'P', 'K', 'D', 'T', '|', '^', 'W']);
+    const chance = this.def.world === 'castle' ? 0.12 : 0.5;
+    for (let y = 1; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        if (!isSolid(x, y) || isSolid(x, y - 1) || busy.has(this.grid[y - 1][x])) continue;
+        const h = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+        if (h > chance) continue;
+        const key = keys[Math.floor(h * 997) % keys.length];
+        const tall = key === 'reeds' || key === 'torch' || key === 'banner' ? 86 : key.startsWith('crystals') || key === 'fern' ? 58 : 44;
+        const img = this.add.image((x + 0.2 + ((h * 7) % 0.6)) * TILE, y * TILE + 8, key).setOrigin(0.5, 1).setDepth(2);
+        img.setScale((tall * (0.8 + ((h * 13) % 0.4))) / img.height).setFlipX(h * 100 > 50);
+        if (key === 'torch') {
+          const flame = this.add.image(img.x, img.y - img.displayHeight * 0.85, 'glow').setDepth(2.1).setTint(0xffb040).setBlendMode(Phaser.BlendModes.ADD).setScale(1.6);
+          this.tweens.add({ targets: flame, alpha: { from: 0.55, to: 0.9 }, scale: 1.8, yoyo: true, repeat: -1, duration: 260 + h * 200 });
+        }
+      }
+    }
+  }
+
   private spawnThings() {
     const data = load();
     let start = new Phaser.Math.Vector2(2 * TILE, 5 * TILE);
@@ -297,8 +436,10 @@ export class LevelScene extends Phaser.Scene {
           this.addMover(x * TILE + TILE, y * TILE + 11, axis, axis === 'y' ? 2 * TILE : 5 * TILE, key);
         } else if (c === 'F') this.addFaller(cx, y * TILE + 11);
         else if (c === 'L') {
-          const img = this.add.image(cx, y * TILE + 22, 'lily').setDepth(26).setDisplaySize(TILE + 24, 28);
-          this.tweens.add({ targets: img, y: img.y + 4, yoyo: true, repeat: -1, duration: 900 + Math.random() * 400 });
+          // under Alice (20) and under the water (25): she stands ON the pad, the water laps its lower edge;
+          // no bobbing, the pad must not move away from her feet
+          const img = this.add.image(cx, y * TILE - 10, 'lily').setOrigin(0.5, 0).setDepth(19);
+          img.setScale((TILE + 24) / img.width);
         } else if (c === 'W') this.witch = new Witch(this, x, y);
         else if (ENEMY_CHARS[c]) {
           const kind = ENEMY_CHARS[c];
@@ -336,8 +477,14 @@ export class LevelScene extends Phaser.Scene {
     b.setAllowGravity(false).setImmovable(true);
     b.moves = false;
     this.makeOneWay(b);
-    const view = this.add.image(x, y - 11, key).setOrigin(0.5, 0).setDisplaySize(w + 10, key === 'tile-wood' ? 26 : 40).setDepth(6);
-    this.movers.push({ zone, view, x0: x, y0: y, axis, range, period: axis === 'x' ? 4.2 : 3, phase: Math.random() * 6 });
+    let view: Phaser.GameObjects.Image | Phaser.GameObjects.TileSprite;
+    if (key === 'tile-wood') {
+      view = this.add.tileSprite(x, y - 11, w, 28, 'ground-wood').setOrigin(0.5, 0).setDepth(6);
+    } else {
+      view = this.add.image(x, y - 11 - (key === 'cloud' ? 6 : 4), key).setOrigin(0.5, 0).setDepth(6);
+      view.setScale((w + 16) / view.width);
+    }
+    this.movers.push({ zone, view, lift: key === 'cloud' ? 6 : key === 'tile-wood' ? 0 : 4, x0: x, y0: y, axis, range, period: axis === 'x' ? 4.2 : 3, phase: Math.random() * 6 });
   }
 
   private addFaller(x: number, y: number) {
@@ -346,7 +493,8 @@ export class LevelScene extends Phaser.Scene {
     const b = zone.body as Body;
     b.setAllowGravity(false).setImmovable(true);
     this.makeOneWay(b);
-    const view = this.add.image(x, y - 11, 'log').setOrigin(0.5, 0).setDisplaySize(TILE + 4, 30).setDepth(6);
+    const view = this.add.image(x, y - 13, 'log').setOrigin(0.5, 0).setDepth(6);
+    view.setScale((TILE + 8) / view.width);
     this.fallers.push({ zone, view, x0: x, y0: y, state: 'still', timer: 0 });
   }
 
@@ -354,6 +502,132 @@ export class LevelScene extends Phaser.Scene {
     if (f.state === 'still' && this.player.body.bottom <= f.zone.y) {
       f.state = 'shake';
       f.timer = 0.45;
+    }
+  }
+
+  // ---------- atmosphere: parallax, light, particles (all cheap: a few dozen sprites, no shaders) ----------
+  private setupAtmosphere() {
+    const W = viewW(this);
+    const look: Record<string, { color: number; add: boolean; count: number; rays: number; rayTint: number; vignette: number; butterflies: number }> = {
+      meadow: { color: 0xfff6c8, add: false, count: 18, rays: 3, rayTint: 0xfff2b0, vignette: 0.22, butterflies: 3 },
+      forest: { color: 0xd8ff7a, add: true, count: 28, rays: 4, rayTint: 0xffc080, vignette: 0.42, butterflies: 0 },
+      river: { color: 0xffffff, add: true, count: 16, rays: 3, rayTint: 0xfff6d0, vignette: 0.22, butterflies: 2 },
+      cave: { color: 0x7ff6ff, add: true, count: 26, rays: 0, rayTint: 0, vignette: 0.6, butterflies: 0 },
+      castle: { color: 0xd59bff, add: true, count: 24, rays: 0, rayTint: 0, vignette: 0.5, butterflies: 0 },
+    };
+    const L = look[this.def.world];
+    if (LOW_POWER) {
+      L.count = Math.round(L.count * 0.5);
+      L.rays = Math.min(L.rays, 2);
+    }
+    for (let i = 0; i < L.rays; i++) {
+      const ray = this.add.image(W * (0.15 + i * 0.25), -40, 'ray').setOrigin(0.5, 0).setScrollFactor(0).setDepth(-12);
+      ray.setDisplaySize(140 + i * 30, GAME_H * 1.3).setAngle(22).setTint(L.rayTint).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.1);
+      this.tweens.add({ targets: ray, alpha: 0.2, duration: 2600 + i * 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      this.rays.push(ray);
+    }
+    for (let i = 0; i < L.count; i++) {
+      const par = 0.3 + Math.random() * 0.9;
+      const img = this.add.image(0, 0, 'glow').setScrollFactor(0).setTint(L.color).setDepth(par > 0.8 ? 30 : -11);
+      img.setScale((L.add ? 0.22 : 0.12) * par);
+      if (L.add) img.setBlendMode(Phaser.BlendModes.ADD);
+      this.motes.push({ img, x: Math.random() * W, y: Math.random() * GAME_H, vx: (Math.random() - 0.5) * 20, vy: -6 - Math.random() * 14, par, phase: Math.random() * 6 });
+    }
+    if (hasArt(this, 'butterfly1')) {
+      for (let i = 0; i < L.butterflies; i++) {
+        const img = this.add.image(0, 0, 'butterfly1').setScrollFactor(0).setDepth(-11).setScale(0.45);
+        this.motes.push({ img, x: Math.random() * W, y: 120 + Math.random() * 300, vx: 30 + Math.random() * 20, vy: 0, par: 0.6, phase: Math.random() * 6, flutter: true });
+      }
+    }
+    this.vignette = this.add.image(0, 0, 'vignette').setOrigin(0).setScrollFactor(0).setDepth(90).setAlpha(L.vignette);
+    this.vignette.setDisplaySize(W, GAME_H);
+    this.shadow = this.add.image(0, 0, 'shadow').setDepth(19).setAlpha(0);
+    this.lastCam.set(this.cameras.main.scrollX, this.cameras.main.scrollY);
+  }
+
+  /** Blurred plants/rocks that pass in front of the camera faster than the level: the strongest depth cue. */
+  private addForeground() {
+    const dark = this.def.world === 'cave' || this.def.world === 'castle';
+    const keys = (dark ? ['fg-rock', 'fg-stalagmite', 'fg-pillar', 'fg-thorns'] : ['fg-grass', 'fg-leaves', 'fg-fern', 'fg-bush']).filter((k) => hasArt(this, k));
+    if (!keys.length) return;
+    const f = 1.35;
+    const span = this.cols * TILE * f + Math.max(viewW(this), 1920);
+    const count = Math.floor(span / (LOW_POWER ? 1300 : 900));
+    for (let i = 0; i < count; i++) {
+      const h = Math.abs(Math.sin(i * 91.7 + this.def.index * 13.1) * 43758.5453) % 1;
+      const key = keys[Math.floor(h * 97) % keys.length];
+      // low enough to peek out only below the ground line; fades out near Alice (see updateLayers)
+      const img = this.add.image(i * (span / count) + h * 300, this.rows * TILE + 40, key).setOrigin(0.5, 1).setDepth(60);
+      img.setScrollFactor(f, 1).setScale((130 + h * 50) / img.height).setFlipX(h > 0.5).setTint(dark ? 0x6a5a8a : 0x6f8f5a);
+      this.fg.push(img);
+    }
+  }
+
+  private fitFarBackground(src: { width: number; height: number }) {
+    // 25% wider than the screen gives a slow pan (~0.05 of the level speed) without ever showing an edge
+    const k = Math.max(GAME_H / src.height, (viewW(this) * 1.25) / src.width);
+    this.bg.setScale(k);
+    this.bg.y = -(this.bg.displayHeight - GAME_H) * 0.4;
+  }
+
+  private updateLayers(now: number, dt: number) {
+    const cam = this.cameras.main;
+    const maxY = Math.max(0, this.rows * TILE - GAME_H);
+    const maxX = Math.max(1, this.cols * TILE - viewW(this));
+    this.bg.x = -(cam.scrollX / maxX) * (this.bg.displayWidth - viewW(this));
+    if (this.mid) {
+      this.mid.tilePositionX = (cam.scrollX * 0.4) / this.mid.tileScaleX;
+      this.mid.y = (maxY - cam.scrollY) * 0.4 + 30;
+    }
+    if (this.near) {
+      this.near.tilePositionX = (cam.scrollX * 0.7) / this.near.tileScaleX;
+      this.near.y = (maxY - cam.scrollY) * 0.7 + 40;
+    }
+    const px = this.player.body.center.x - cam.scrollX;
+    for (const img of this.fg) {
+      const sx = img.x - cam.scrollX * img.scrollFactorX;
+      img.setAlpha(Math.abs(sx - px) < img.displayWidth / 2 + 90 ? 0.3 : 0.95);
+    }
+    if (++this.cullTick % 4 === 0) {
+      const view = new Phaser.Geom.Rectangle(cam.worldView.x - 480, cam.worldView.y - 320, cam.worldView.width + 960, cam.worldView.height + 640);
+      for (const st of this.statics) st.obj.setVisible(Phaser.Geom.Intersects.RectangleToRectangle(view, st.rect));
+    }
+    for (const w of this.waves) w.tilePositionX = now / 40;
+    const dx = cam.scrollX - this.lastCam.x;
+    const dy = cam.scrollY - this.lastCam.y;
+    this.lastCam.set(cam.scrollX, cam.scrollY);
+    const W = viewW(this);
+    for (const m of this.motes) {
+      m.x += m.vx * dt - dx * m.par;
+      m.y += m.vy * dt - dy * m.par * 0.5;
+      if (m.x < -40) m.x += W + 80;
+      if (m.x > W + 40) m.x -= W + 80;
+      if (m.y < -40) m.y += GAME_H + 80;
+      if (m.y > GAME_H + 40) m.y -= GAME_H + 80;
+      const t = now / 1000 + m.phase;
+      if (m.flutter) {
+        m.img.setTexture(Math.floor(now / 90 + m.phase * 10) % 2 ? 'butterfly1' : 'butterfly2');
+        m.img.setPosition(m.x, m.y + Math.sin(t * 2.2) * 30).setAngle(Math.sin(t * 3) * 15 + 90);
+      } else {
+        m.img.setPosition(m.x + Math.sin(t * 1.3) * 12, m.y);
+        m.img.setAlpha(0.35 + Math.abs(Math.sin(t * 1.7)) * 0.65);
+      }
+    }
+    // soft shadow under Alice on the ground below her, fading with height
+    const p = this.player.body;
+    let gy = -1;
+    for (let y = p.bottom; y < p.bottom + 260; y += 12) {
+      if (this.floorAt(p.center.x, y)) {
+        gy = Math.floor(y / TILE) * TILE;
+        const m = this.movers.find((mv) => mv.zone.getBounds().contains(p.center.x, y));
+        if (m) gy = (m.zone.body as Body).top;
+        break;
+      }
+    }
+    if (gy < 0 || this.player.climbing) this.shadow.setAlpha(0);
+    else {
+      const k = 1 - Math.min(1, (gy - p.bottom) / 260);
+      this.shadow.setPosition(p.center.x, gy + 2).setAlpha(0.8 * k).setDisplaySize(80 * (0.6 + 0.4 * k), 18);
     }
   }
 
@@ -505,7 +779,7 @@ export class LevelScene extends Phaser.Scene {
     if (keshaPressed) this.useKesha();
 
     const p = this.player.body;
-    this.bg.tilePositionX = this.cameras.main.scrollX * 0.3 / this.bg.tileScaleX;
+    this.updateLayers(now, dt);
 
     // movers
     const t = now / 1000;
@@ -523,7 +797,7 @@ export class LevelScene extends Phaser.Scene {
         this.player.zone.x += dx;
         this.player.zone.y += dy;
       }
-      m.view.setPosition(nx, ny - 11);
+      m.view.setPosition(nx, ny - 11 - m.lift);
     }
     // falling logs
     for (const f of this.fallers) {
@@ -539,13 +813,13 @@ export class LevelScene extends Phaser.Scene {
         }
       } else if (f.state === 'fall') {
         f.timer -= dt;
-        f.view.setPosition(f.zone.x, f.zone.y - 11);
+        f.view.setPosition(f.zone.x, f.zone.y - 13);
         if (f.timer <= 0) {
           f.state = 'still';
           b.setAllowGravity(false);
           b.checkCollision.up = true;
           b.reset(f.x0, f.y0);
-          f.view.setPosition(f.x0, f.y0 - 11).setAlpha(0);
+          f.view.setPosition(f.x0, f.y0 - 13).setAlpha(0);
           this.tweens.add({ targets: f.view, alpha: 1, duration: 300 });
         }
       }
@@ -702,7 +976,7 @@ export class LevelScene extends Phaser.Scene {
       }
       const col = Math.floor(p.center.x / TILE);
       const wTop = this.waterTop[col] ?? -1;
-      if (wTop >= 0 && p.center.y > wTop * TILE + 20) this.fellOut(true);
+      if (wTop >= 0 && p.center.y > this.waterSurface(wTop) + 24) this.fellOut(true);
       else if (p.top > this.rows * TILE + 40) this.fellOut(false);
       if (this.player.hearts <= 0) this.fellOut(false, true);
     }
@@ -763,22 +1037,19 @@ export class LevelScene extends Phaser.Scene {
     this.tweens.add({ targets: k.img, y: k.img.y - 120, scale: k.img.scale * 1.8, duration: 900, ease: 'Back.easeOut' });
     const cam = this.cameras.main;
     const panel = this.add.container(viewW(this) / 2, GAME_H / 2).setScrollFactor(0).setDepth(200);
-    panel.add(this.add.rectangle(0, 0, 620, 340, 0xffffff, 0.94).setStrokeStyle(8, 0xff7eb6));
+    panel.add(paintedPanel(this, 0, 0, 660, 400));
     panel.add(this.add.text(0, -110, 'Кристалл найден!', titleStyle(52, '#ff5fa8', '#ffffff')).setOrigin(0.5));
     panel.add(this.add.text(0, -30, `★ ${this.starsHere} звёздочек`, titleStyle(36, '#ffc93a', '#8a5a00')).setOrigin(0.5));
     const crystals = load().crystals.filter(Boolean).length;
     panel.add(this.add.text(0, 25, `Кристаллов: ${crystals} из 5`, titleStyle(30, '#49c9e8', '#1d4e6b')).setOrigin(0.5));
-    const btn = this.add.text(0, 105, '  Дальше ▶  ', titleStyle(42, '#ffffff')).setOrigin(0.5).setBackgroundColor('#ff7eb6').setPadding(10, 6, 10, 6);
-    btn.setInteractive({ useHandCursor: true });
-    panel.add(btn);
-    panel.setScale(0.2).setAlpha(0);
-    this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 450, delay: 900, ease: 'Back.easeOut' });
     const go = () => {
-      sfx.click();
       cam.fadeOut(300);
       this.time.delayedCall(320, () => this.scene.start('Map'));
     };
-    btn.on('pointerup', go);
+    panel.add(paintedButton(this, 0, 115, 'Дальше ▶', 38, go));
+    panel.setScale(0.2).setAlpha(0);
+    this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 450, delay: 900, ease: 'Back.easeOut' });
+
     this.time.delayedCall(1000, () => this.input.keyboard!.once('keydown', go));
   }
 

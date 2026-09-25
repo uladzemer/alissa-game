@@ -5,7 +5,7 @@ import Phaser from 'phaser';
  * if a file is missing, Boot draws a simple placeholder of the same size so the game still runs.
  * `h` is the pixel height of the file: all frames of one character share one scale (see art/build_assets.py).
  */
-type Shape = 'body' | 'round' | 'star' | 'heart' | 'tile' | 'bg' | 'flag' | 'spikes' | 'plank';
+type Shape = 'body' | 'round' | 'star' | 'heart' | 'tile' | 'tex' | 'bg' | 'flag' | 'spikes' | 'plank' | 'none';
 export interface AssetSpec { w: number; h: number; color: number; shape: Shape }
 
 const A = (w: number, h: number, color: number, shape: Shape): AssetSpec => ({ w, h, color, shape });
@@ -73,17 +73,64 @@ export const ASSETS: Record<string, AssetSpec> = {
   'tile-wood': A(128, 128, 0xb77b43, 'tile'),
   'tile-rock': A(128, 128, 0x4e6477, 'tile'),
   'tile-trunk': A(128, 128, 0x7b4a2a, 'tile'),
+  'ground-dirt': A(128, 128, 0x9a6233, 'tex'),
+  'ground-stone': A(128, 128, 0x8a7fa0, 'tex'),
+  'ground-rock': A(128, 128, 0x4e6477, 'tex'),
+  'ground-wood': A(128, 128, 0xb77b43, 'tex'),
+  'ground-grass': A(128, 72, 0x5cc84a, 'tex'),
+  bark: A(80, 200, 0x7b4a2a, 'tex'),
+  'mid-meadow': A(4, 4, 0, 'none'),
+  'mid-forest': A(4, 4, 0, 'none'),
+  'mid-river': A(4, 4, 0, 'none'),
+  'mid-cave': A(4, 4, 0, 'none'),
+  'mid-castle': A(4, 4, 0, 'none'),
+  grass1: A(4, 4, 0, 'none'),
+  grass2: A(4, 4, 0, 'none'),
+  daisies: A(4, 4, 0, 'none'),
+  flowers: A(4, 4, 0, 'none'),
+  fern: A(4, 4, 0, 'none'),
+  rock: A(4, 4, 0, 'none'),
+  shrooms: A(4, 4, 0, 'none'),
+  reeds: A(4, 4, 0, 'none'),
+  crystals1: A(4, 4, 0, 'none'),
+  crystals2: A(4, 4, 0, 'none'),
+  glowshrooms: A(4, 4, 0, 'none'),
+  stalagmite: A(4, 4, 0, 'none'),
+  torch: A(4, 4, 0, 'none'),
+  banner: A(4, 4, 0, 'none'),
+  butterfly1: A(4, 4, 0, 'none'),
+  'near-meadow': A(4, 4, 0, 'none'),
+  'near-forest': A(4, 4, 0, 'none'),
+  'near-river': A(4, 4, 0, 'none'),
+  'near-cave': A(4, 4, 0, 'none'),
+  'near-castle': A(4, 4, 0, 'none'),
+  'fg-grass': A(4, 4, 0, 'none'),
+  'fg-leaves': A(4, 4, 0, 'none'),
+  'fg-fern': A(4, 4, 0, 'none'),
+  'fg-bush': A(4, 4, 0, 'none'),
+  'fg-rock': A(4, 4, 0, 'none'),
+  'fg-stalagmite': A(4, 4, 0, 'none'),
+  'fg-pillar': A(4, 4, 0, 'none'),
+  'fg-thorns': A(4, 4, 0, 'none'),
+  'ui-button': A(4, 4, 0, 'none'),
+  'ui-panel': A(4, 4, 0, 'none'),
+  'ui-ribbon': A(4, 4, 0, 'none'),
+  'ui-round-pink': A(4, 4, 0, 'none'),
+  'ui-round-blue': A(4, 4, 0, 'none'),
+  'ui-round-green': A(4, 4, 0, 'none'),
+  'ui-round-lilac': A(4, 4, 0, 'none'),
+  butterfly2: A(4, 4, 0, 'none'),
   'bg-meadow': A(1280, 720, 0x8fd8ff, 'bg'),
   'bg-forest': A(1280, 720, 0xf2a37a, 'bg'),
   'bg-river': A(1280, 720, 0x9fe3ff, 'bg'),
   'bg-cave': A(1280, 720, 0x1d3b4f, 'bg'),
   'bg-castle': A(1280, 720, 0x6b4a9e, 'bg'),
-  title: A(1280, 720, 0xffc6e0, 'bg'),
-  ending: A(1280, 720, 0xffe29a, 'bg'),
+  title: A(1280, 800, 0xffc6e0, 'bg'),
+  ending: A(1280, 800, 0xffe29a, 'bg'),
 };
 
 export function preloadAssets(scene: Phaser.Scene) {
-  for (const [key, s] of Object.entries(ASSETS)) scene.load.image(key, `assets/${key}.${s.shape === 'bg' ? 'jpg' : 'png'}`);
+  for (const [key, s] of Object.entries(ASSETS)) scene.load.image(key, `assets/${key}.${s.shape === 'bg' || s.shape === 'tex' ? 'jpg' : 'png'}`);
 }
 
 /** Draw a placeholder for every asset that failed to load. */
@@ -104,7 +151,10 @@ export function makePlaceholders(scene: Phaser.Scene) {
         for (let i = 0; i < 8; i++) g.fillCircle(i * 180, h, 170);
         break;
       }
+      case 'none':
+        break;
       case 'tile':
+      case 'tex':
         g.fillStyle(color);
         g.fillRect(0, 0, w, h);
         g.fillStyle(dark, 0.6);
@@ -179,6 +229,7 @@ export function makePlaceholders(scene: Phaser.Scene) {
     g.generateTexture(key, w, h);
     g.destroy();
   }
+  makeFxTextures(scene);
   // 1x1 white pixel for effects
   if (!scene.textures.exists('px')) {
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
@@ -193,4 +244,82 @@ export function makePlaceholders(scene: Phaser.Scene) {
 export function scaleFor(scene: Phaser.Scene, key: string, displayH: number, refH?: number) {
   const src = scene.textures.get(key).getSourceImage() as { height: number };
   return displayH / (refH ?? src.height);
+}
+
+/** True when a real picture was loaded (decor is skipped when only a placeholder exists). */
+export function hasArt(scene: Phaser.Scene, key: string) {
+  const src = scene.textures.get(key).getSourceImage() as { width: number };
+  return scene.textures.exists(key) && src.width > 8;
+}
+
+/** Soft effect textures drawn once on a canvas: cheap to render, no extra downloads. */
+function makeFxTextures(scene: Phaser.Scene) {
+  const canvas = (key: string, w: number, h: number, draw: (c: CanvasRenderingContext2D) => void) => {
+    if (scene.textures.exists(key)) return;
+    const t = scene.textures.createCanvas(key, w, h);
+    if (!t) return;
+    draw(t.getContext());
+    t.refresh();
+  };
+  canvas('glow', 64, 64, (c) => {
+    const g = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.25, 'rgba(255,255,255,0.6)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 64, 64);
+  });
+  canvas('shadow', 128, 32, (c) => {
+    const g = c.createRadialGradient(64, 16, 0, 64, 16, 64);
+    g.addColorStop(0, 'rgba(20,10,30,0.55)');
+    g.addColorStop(1, 'rgba(20,10,30,0)');
+    c.setTransform(1, 0, 0, 0.25, 0, 12);
+    c.fillStyle = g;
+    c.fillRect(0, -48, 128, 128);
+  });
+  canvas('vignette', 256, 144, (c) => {
+    const g = c.createRadialGradient(128, 72, 40, 128, 72, 150);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.6, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(10,0,25,0.85)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 256, 144);
+  });
+  canvas('ray', 64, 256, (c) => {
+    const g = c.createLinearGradient(0, 0, 64, 0);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.5, 'rgba(255,250,220,1)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 64, 256);
+    const fade = c.createLinearGradient(0, 0, 0, 256);
+    fade.addColorStop(0, 'rgba(0,0,0,0)');
+    fade.addColorStop(1, 'rgba(0,0,0,1)');
+    c.globalCompositeOperation = 'destination-out';
+    c.fillStyle = fade;
+    c.fillRect(0, 0, 64, 256);
+  });
+  canvas('wave', 64, 16, (c) => {
+    c.fillStyle = 'rgba(230,248,255,0.95)';
+    for (let i = 0; i < 2; i++) {
+      c.beginPath();
+      c.ellipse(16 + i * 32, 10, 15, 6, 0, Math.PI, 0);
+      c.fill();
+    }
+    c.fillRect(0, 9, 64, 3);
+  });
+  canvas('shade', 8, 64, (c) => {
+    const g = c.createLinearGradient(0, 0, 0, 64);
+    g.addColorStop(0, 'rgba(40,20,10,0.55)');
+    g.addColorStop(1, 'rgba(40,20,10,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 8, 64);
+  });
+  canvas('side', 32, 8, (c) => {
+    const g = c.createLinearGradient(0, 0, 32, 0);
+    g.addColorStop(0, 'rgba(30,15,10,0.5)');
+    g.addColorStop(1, 'rgba(30,15,10,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 32, 8);
+  });
 }
