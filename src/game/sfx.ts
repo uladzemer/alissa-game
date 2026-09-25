@@ -32,7 +32,7 @@ export function unlockAudio() {
 const SAMPLE_NAMES = [
   'jump', 'doublejump', 'star', 'strawberry', 'shoot', 'befriend', 'stomp', 'hurt', 'shield', 'checkpoint',
   'kesha', 'crystal', 'win', 'click', 'magic', 'bosshit',
-  'step-grass0', 'step-grass1', 'step-grass2', 'step-grass3', 'step-stone0', 'step-stone1', 'step-stone2', 'step-stone3',
+  ...[0, 1, 2, 3, 4].flatMap((i) => [`step-grass${i}`, `step-stone${i}`]),
 ];
 const buffers = new Map<string, AudioBuffer>();
 let loading = false;
@@ -58,6 +58,22 @@ function loadSamples() {
       }
     })
     .catch(() => undefined);
+}
+
+let lastStep = 0;
+
+/** Recorded sound at a set pitch (footsteps: a steady left-right rhythm reads as running). */
+function playAt(name: string, vol: number, rate: number) {
+  const buf = buffers.get(name);
+  const a = ctx;
+  if (!buf || !a || !master) return;
+  const src = a.createBufferSource();
+  const g = a.createGain();
+  src.buffer = buf;
+  src.playbackRate.value = rate * (1 + (Math.random() - 0.5) * 0.03);
+  g.gain.value = vol;
+  src.connect(g).connect(master);
+  src.start();
 }
 
 /** Play a recorded sound; false if it is not loaded (then the caller uses the synth). Slight pitch variety. */
@@ -134,8 +150,13 @@ export const sfx = {
   click: () => play('click', 0.8, 0.04) || tone(700, 900, 0.05, 'triangle', 0.2),
   magic: () => play('magic', 0.6) || tone(300, 900, 0.35, 'sine', 0.15),
   bossHit: () => play('bosshit', 0.7) || tone(250, 180, 0.12, 'square', 0.2),
-  /** Footstep on grass or stone (quiet, only recorded: no synth fallback). */
-  step: (ground: 'grass' | 'stone') => play(`step-${ground}${Math.floor(Math.random() * 4)}`, 0.35, 0.08),
+  /** Footstep on grass or stone: 5 variants, never the same one twice, left/right foot a little different. */
+  step: (ground: 'grass' | 'stone', foot: 0 | 1) => {
+    let i = Math.floor(Math.random() * 4);
+    if (i >= lastStep) i++;
+    lastStep = i;
+    playAt(`step-${ground}${i}`, ground === 'grass' ? 0.75 : 0.6, foot ? 1.06 : 0.95);
+  },
 };
 
 // --- Music: a small chiptune per world (placeholder until the real soundtrack arrives). ---
