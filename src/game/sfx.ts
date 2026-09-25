@@ -32,7 +32,6 @@ export function unlockAudio() {
 const SAMPLE_NAMES = [
   'jump', 'doublejump', 'star', 'strawberry', 'shoot', 'befriend', 'stomp', 'hurt', 'shield', 'checkpoint',
   'kesha', 'crystal', 'win', 'click', 'magic', 'bosshit',
-  ...[0, 1, 2, 3, 4].flatMap((i) => [`step-grass${i}`, `step-stone${i}`]),
 ];
 const buffers = new Map<string, AudioBuffer>();
 let loading = false;
@@ -60,19 +59,30 @@ function loadSamples() {
     .catch(() => undefined);
 }
 
-let lastStep = 0;
+/**
+ * Footstep "тук-тук" chosen by the owner and Alisa (option C on the listening page): a 50 ms burst of noise
+ * through a band-pass filter, left foot 1150 Hz, right foot 1500 Hz, so a steady left-right rhythm reads as running.
+ */
+let tickBuf: AudioBuffer | null = null;
 
-/** Recorded sound at a set pitch (footsteps: a steady left-right rhythm reads as running). */
-function playAt(name: string, vol: number, rate: number) {
-  const buf = buffers.get(name);
-  const a = ctx;
-  if (!buf || !a || !master) return;
+function footTick(foot: 0 | 1) {
+  const a = ac();
+  if (!a || !master) return;
+  if (!tickBuf) {
+    const len = Math.floor(a.sampleRate * 0.05);
+    tickBuf = a.createBuffer(1, len, a.sampleRate);
+    const d = tickBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  }
   const src = a.createBufferSource();
+  src.buffer = tickBuf;
+  const bp = a.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = foot ? 1500 : 1150;
+  bp.Q.value = 3;
   const g = a.createGain();
-  src.buffer = buf;
-  src.playbackRate.value = rate * (1 + (Math.random() - 0.5) * 0.03);
-  g.gain.value = vol;
-  src.connect(g).connect(master);
+  g.gain.value = 3.2; // the master bus is at 0.5: same loudness as on the listening page
+  src.connect(bp).connect(g).connect(master);
   src.start();
 }
 
@@ -150,13 +160,8 @@ export const sfx = {
   click: () => play('click', 0.8, 0.04) || tone(700, 900, 0.05, 'triangle', 0.2),
   magic: () => play('magic', 0.6) || tone(300, 900, 0.35, 'sine', 0.15),
   bossHit: () => play('bosshit', 0.7) || tone(250, 180, 0.12, 'square', 0.2),
-  /** Footstep on grass or stone: 5 variants, never the same one twice, left/right foot a little different. */
-  step: (ground: 'grass' | 'stone', foot: 0 | 1) => {
-    let i = Math.floor(Math.random() * 4);
-    if (i >= lastStep) i++;
-    lastStep = i;
-    playAt(`step-${ground}${i}`, ground === 'grass' ? 0.75 : 0.6, foot ? 1.06 : 0.95);
-  },
+  /** Footstep: a light "тук-тук", the left and right foot at slightly different pitch. */
+  step: (foot: 0 | 1) => footTick(foot),
 };
 
 // --- Music: a small chiptune per world (placeholder until the real soundtrack arrives). ---

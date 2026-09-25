@@ -201,7 +201,7 @@ export class Player {
       key = `alice-run${(frame % frames) + 1}`;
       // a footstep whenever a foot lands (the contact frames)
       if (frame !== before && frame % (frames / 2) === 0) {
-        sfx.step(this.scene.def.ground === 'grass' ? 'grass' : 'stone', (Math.floor(frame / (frames / 2)) % 2) as 0 | 1);
+        sfx.step((Math.floor(frame / (frames / 2)) % 2) as 0 | 1);
       }
     }
     this.view.setTexture(key);
