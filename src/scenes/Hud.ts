@@ -146,7 +146,8 @@ export class HudScene extends Phaser.Scene {
         if (dx < -38) touch.left = true;
         if (dx > 38) touch.right = true;
         if (dy < -52) touch.up = true;
-        if (dy > 52) touch.down = true;
+        // 'down' (crouch / climb down) only for an almost vertical push: a thumb sliding right-and-down keeps running
+        if (dy > 52 && Math.abs(dx) < dy * 0.6) touch.down = true;
         const len = Math.min(1, Math.hypot(dx, dy) / 120);
         const a = Math.atan2(dy, dx);
         knob = { x: PAD.x + Math.cos(a) * len * 120, y: PAD.y + Math.sin(a) * len * 120 };

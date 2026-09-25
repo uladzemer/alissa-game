@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { PHYS, PLAYER } from './constants';
-import { REF_H as REF } from './assets';
+import { REF_H as REF, hasArt } from './assets';
 import { InputState } from './controls';
 import { sfx } from './sfx';
 import type { LevelScene } from '../scenes/Level';
@@ -16,6 +16,7 @@ export class Player {
   maxHearts: number;
   climbing = false;
   shieldOn = false;
+  crouching = false;
   frozen = false;
 
   private lastGround = -9999;
@@ -76,6 +77,7 @@ export class Player {
     // --- climbing trees and vines ---
     const climbHere = this.scene.climbableAt(b.center.x, b.center.y);
     if (!this.climbing && climbHere && (inp.up || (inp.down && !this.onGround)) && now > this.climbLockUntil && !hurt) {
+      if (this.crouching) this.setCrouch(false);
       this.climbing = true;
       this.airJumps = 0;
     }
@@ -110,10 +112,15 @@ export class Player {
       }
     }
 
+    // --- crouch (hold down on the ground): smaller body, low shots; stands up only where there is room ---
+    const wantCrouch = inp.down && this.onGround && !hurt;
+    if (wantCrouch && !this.crouching) this.setCrouch(true);
+    else if (!wantCrouch && this.crouching && this.canStand()) this.setCrouch(false);
+
     // --- running, shield ---
-    this.shieldOn = inp.shield && !hurt;
+    this.shieldOn = inp.shield && !hurt && !this.crouching;
     if (!hurt) {
-      const speed = this.shieldOn ? PHYS.shieldSpeed : PHYS.runSpeed;
+      const speed = this.crouching ? 0 : this.shieldOn ? PHYS.shieldSpeed : PHYS.runSpeed;
       const target = dir * speed;
       const accel = this.onGround ? 0.35 : 0.2;
       b.setVelocityX(Phaser.Math.Linear(b.velocity.x, target, accel));
@@ -121,7 +128,8 @@ export class Player {
     }
 
     // --- jumping: coyote time, buffer, double jump, variable height ---
-    if (this.jumpBufferUntil > now && !hurt) {
+    if (this.jumpBufferUntil > now && !hurt && this.crouching && this.canStand()) this.setCrouch(false);
+    if (this.jumpBufferUntil > now && !hurt && !this.crouching) {
       if (now - this.lastGround < PHYS.coyoteMs) {
         b.setVelocityY(-PHYS.jumpVel);
         this.lastGround = -9999;
@@ -141,10 +149,31 @@ export class Player {
     if (inp.shoot && now >= this.shootReadyAt && !this.shieldOn && !hurt) {
       this.shootReadyAt = now + PLAYER.shootCdMs;
       this.shootAnimUntil = now + 220;
-      this.scene.shootHeart(b.center.x + this.facing * 40, b.center.y - 6, this.facing);
+      // from a crouch the heart flies low, at hedgehog height
+      const y = this.crouching ? b.bottom - 40 : b.center.y - 6;
+      this.scene.shootHeart(b.center.x + this.facing * 40, y, this.facing);
     }
 
     this.render(now, dt);
+  }
+
+  private setCrouch(on: boolean) {
+    this.crouching = on;
+    const h = on ? PLAYER.crouchH : PLAYER.bodyH;
+    // the zone is bodyH tall; keep the feet where they are by offsetting the smaller body down
+    this.body.setSize(PLAYER.bodyW, h, false);
+    this.body.setOffset(0, PLAYER.bodyH - h);
+    // same frame: platforms, shots and the sprite see the new size. prev/prevFrame must follow too, otherwise
+    // the physics post-update reads the offset change as movement and shoves the zone 32px (through platforms)
+    this.body.updateFromGameObject();
+    this.body.prev.copy(this.body.position);
+    this.body.prevFrame.copy(this.body.position);
+  }
+
+  private canStand() {
+    const b = this.body;
+    const top = b.bottom - PLAYER.bodyH + 4;
+    return !this.scene.solidAt(b.left + 4, top) && !this.scene.solidAt(b.right - 4, top);
   }
 
   private stopClimb() {
@@ -157,23 +186,27 @@ export class Player {
     let key = 'alice-idle';
     if (now < this.hurtUntil) key = 'alice-hurt';
     else if (this.climbing) key = Math.floor(this.climbClock * 6) % 2 ? 'alice-climb2' : 'alice-climb1';
+    else if (this.crouching && hasArt(this.scene, 'alice-crouch')) key = now < this.shootAnimUntil ? 'alice-crouch-shoot' : 'alice-crouch';
+    else if (this.crouching) key = 'alice-shield'; // fallback pose if the crouch art is missing
     else if (this.shieldOn) key = 'alice-shield';
     else if (now < this.shootAnimUntil) key = 'alice-shoot';
     else if (!this.onGround) key = b.velocity.y < 0 ? 'alice-jump' : 'alice-fall';
     else if (Math.abs(b.velocity.x) > 20) {
-      const before = Math.floor(this.runClock * 12);
+      // 6-frame cycle (contact, down, passing for each leg); the old 4-frame art is a fallback
+      const frames = hasArt(this.scene, 'alice-run6') ? 6 : 4;
+      const fps = frames === 6 ? 14 : 12;
+      const before = Math.floor(this.runClock * fps);
       this.runClock += dt * (Math.abs(b.velocity.x) / PHYS.runSpeed);
-      const frame = Math.floor(this.runClock * 12);
-      key = `alice-run${(frame % 4) + 1}`;
-      // a footstep whenever a foot lands (frames 1 and 3 of the run cycle)
-      if (frame !== before && frame % 2 === 0) sfx.step(this.scene.def.ground === 'grass' ? 'grass' : 'stone');
+      const frame = Math.floor(this.runClock * fps);
+      key = `alice-run${(frame % frames) + 1}`;
+      // a footstep whenever a foot lands (the contact frames)
+      if (frame !== before && frame % (frames / 2) === 0) sfx.step(this.scene.def.ground === 'grass' ? 'grass' : 'stone');
     }
     this.view.setTexture(key);
     this.view.setFlipX(this.facing < 0);
     this.view.setPosition(b.center.x, b.bottom + 3);
-    const breathe = key === 'alice-idle' ? 1 + Math.sin(now / 300) * 0.015 : 1;
-    const s = PLAYER.viewH / REF.character;
-    this.view.setScale(s, s * breathe);
+    const breathe = key === 'alice-idle' ? 1 + Math.sin(now / 300) * 0.01 : 1;
+    this.view.setScale((PLAYER.viewH / REF.character) * breathe);
     this.view.setAlpha(this.invulnerable && Math.floor(now / 60) % 2 ? 0.55 : 1);
   }
 
@@ -207,6 +240,7 @@ export class Player {
 
   teleport(x: number, y: number) {
     if (this.climbing) this.stopClimb();
+    if (this.crouching) this.setCrouch(false);
     this.body.reset(x, y);
     this.body.setVelocity(0, 0);
     this.invulnUntil = this.scene.time.now + PLAYER.invulnMs;

@@ -9,6 +9,16 @@ import { sfx } from './sfx';
  * if a picture is missing, a simple drawn version is used.
  */
 
+/** Fix a container and everything inside it (nested containers too) to the screen. */
+export function pinToScreen(c: Phaser.GameObjects.Container) {
+  c.setScrollFactor(0);
+  for (const child of c.list) {
+    const o = child as Phaser.GameObjects.GameObject & { setScrollFactor?: (x: number, y?: number) => unknown };
+    if (child instanceof Phaser.GameObjects.Container) pinToScreen(child);
+    else o.setScrollFactor?.(0, 0);
+  }
+}
+
 export function paintedButton(scene: Phaser.Scene, x: number, y: number, label: string, size: number, cb: () => void, minWidth = 0) {
   const c = scene.add.container(x, y);
   const text = scene.add.text(0, -size * 0.06, label, titleStyle(size, '#ffffff', '#b8326f')).setOrigin(0.5);

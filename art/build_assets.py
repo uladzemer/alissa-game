@@ -18,7 +18,7 @@ CHAR_H = 200  # reference height of the first frame of every character sheet (se
 ITEM_H = 128
 
 
-def split(sheet: Image.Image, count: int, min_share=0.02, alpha_floor=0):
+def split(sheet: Image.Image, count: int, min_share=0.02, alpha_floor=0, common_rows=False):
     """Split a sheet of `count` side-by-side objects into images, left to right.
     Separate silhouettes are taken as they are (small bits go to the nearest one);
     touching ones are cut at the emptiest column near each boundary."""
@@ -42,11 +42,15 @@ def split(sheet: Image.Image, count: int, min_share=0.02, alpha_floor=0):
             owner = min(big, key=lambda b: (centre(b)[0] - cx) ** 2 + (centre(b)[1] - cy) ** 2)
             groups[owner].append(k)
         out = []
+        rows = np.nonzero(mask.any(1))[0]
         for k in big:
             keep = np.isin(lab, [g + 1 for g in groups[k]])
             piece = sheet.copy()
             piece.putalpha(Image.fromarray(np.where(keep, a, 0).astype('uint8')))
-            out.append(piece.crop(piece.getbbox()))
+            box = piece.getbbox()
+            if common_rows:
+                box = (box[0], int(rows[0]), box[2], int(rows[-1]) + 1)
+            out.append(piece.crop(box))
         return out
     colsum = mask.sum(0)
     q = sheet.width // count
@@ -73,14 +77,17 @@ def save(img: Image.Image, name: str, jpg=False):
     print(f'  {name}.{"jpg" if jpg else "png"} {img.width}x{img.height}')
 
 
-def sheet(src: str, names: list[str], ref_index=0, ref_h=CHAR_H, same_scale=True, blur=0.0, **kw):
+def sheet(src: str, names: list[str], ref_index=0, ref_h=CHAR_H, same_scale=True, blur=0.0, ref_frame_h=None, **kw):
     path = SRC / src
     if not path.exists():
         print(f'skip {src} (missing)')
         return
     print(src)
     frames = split(Image.open(path).convert('RGBA'), len(names), **kw)
-    k = ref_h / frames[ref_index].height
+    # ref_frame_h: measure the reference by its own silhouette (frames may be padded to a common height)
+    ref_img = frames[ref_index]
+    ref_px = ref_img.getchannel('A').point(lambda v: 255 if v > 40 else 0).getbbox()
+    k = ref_h / ((ref_px[3] - ref_px[1]) if ref_frame_h and ref_px else ref_img.height)
     for f, name in zip(frames, names):
         s = k if same_scale else ref_h / f.height
         out = f.resize((max(1, round(f.width * s)), max(1, round(f.height * s))), Image.LANCZOS)
@@ -114,6 +121,27 @@ def align_on_head(names: list[str]):
     for f, (ax, ay), n in zip(frames, anchors, names):
         canvas = Image.new('RGBA', (left + right, top + bottom), (0, 0, 0, 0))
         canvas.paste(f, (left - ax, top - ay), f)
+        save(canvas, n)
+
+
+def align_on_torso(names: list[str]):
+    """Same canvas for every frame, head/torso (top 40% of the silhouette) at the same x, bottoms kept."""
+    paths = [OUT / f'{n}.png' for n in names]
+    if not all(p.exists() for p in paths):
+        return
+    frames = [Image.open(p).convert('RGBA') for p in paths]
+    anchors = []
+    for f in frames:
+        a = np.asarray(f.getchannel('A')) > 40
+        rows = np.nonzero(a.any(1))[0]
+        top = a[rows[0]: rows[0] + int((rows[-1] - rows[0]) * 0.4)]
+        anchors.append(int(np.nonzero(top)[1].mean()))
+    left = max(anchors)
+    right = max(f.width - ax for f, ax in zip(frames, anchors))
+    height = max(f.height for f in frames)
+    for f, ax, n in zip(frames, anchors, names):
+        canvas = Image.new('RGBA', (left + right, height), (0, 0, 0, 0))
+        canvas.paste(f, (left - ax, height - f.height), f)
         save(canvas, n)
 
 
@@ -160,6 +188,14 @@ sheet('alice-a.png', ['alice-idle', 'alice-run1', 'alice-run2', 'alice-run3', 'a
 sheet('alice-b.png', ['alice-fall', 'alice-climb1', 'alice-climb2', 'alice-shoot', 'alice-shield', 'alice-hurt'], ref_index=3)
 sheet('kesha.png', ['kesha-fly1', 'kesha-fly2', 'kesha-blow'], min_share=0.004)
 align_on_head(['kesha-fly1', 'kesha-fly2', 'kesha-blow'])
+
+# Alice's 6-frame run cycle (legs alternate; the up-phases keep their small bounce because all frames
+# share the sheet's ground line). Scale: the contact frames are as tall as the idle pose.
+sheet('alice-run.png', [f'alice-run{i}' for i in range(1, 7)], ref_h=196, ref_frame_h=True, common_rows=True)
+align_on_torso([f'alice-run{i}' for i in range(1, 7)])
+# crouch: panel 1 is a standing Alice drawn only to match the size, then the two crouch poses
+sheet('alice-crouch.png', ['_alice-ref', 'alice-crouch', 'alice-crouch-shoot'], ref_h=CHAR_H, ref_frame_h=True)
+(OUT / '_alice-ref.png').unlink(missing_ok=True)
 sheet('witch.png', ['witch-fly', 'witch-cast', 'witch-kind'], min_share=0.004)
 sheet('hedgehog.png', ['hedgehog1', 'hedgehog2'])
 sheet('mushroom.png', ['mushroom1', 'mushroom2', 'mushroom-flat'])

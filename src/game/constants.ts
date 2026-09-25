@@ -41,6 +41,7 @@ export const PHYS = {
 export const PLAYER = {
   bodyW: 40,
   bodyH: 88,
+  crouchH: 56,
   viewH: 114,
   maxHearts: 3,
   heartCap: 5,

@@ -91,7 +91,7 @@ export class TitleScene extends Phaser.Scene {
     this.tweens.add({ targets: play, scale: 1.08, yoyo: true, repeat: -1, duration: 700 });
     const hintY = GAME_H - (isTouchDevice() ? 70 : 40);
     const hint = this.add
-      .text(GAME_W / 2, hintY, isTouchDevice() ? 'Кнопки на экране: слева — ходить, справа — прыгать и стрелять' : 'Стрелки — бег  •  Пробел — прыжок  •  X — сердечки  •  Z — щит  •  C — Кеша', titleStyle(22))
+      .text(GAME_W / 2, hintY, isTouchDevice() ? 'Слева — ходить (вниз — присесть), справа — прыгать и стрелять' : 'Стрелки — бег  •  ↓ — присесть  •  Пробел — прыжок  •  X — сердечки  •  Z — щит  •  C — Кеша', titleStyle(22))
       .setOrigin(0.5)
       .setDepth(2);
     const hb = this.add.graphics();

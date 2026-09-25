@@ -5,7 +5,7 @@ import { Player } from '../game/player';
 import { Enemy, ENEMY_CHARS, Witch } from '../game/enemies';
 import { Keyboard, InputState, blank } from '../game/controls';
 import { hasArt } from '../game/assets';
-import { paintedButton, paintedPanel, ribbonTitle } from '../game/ui';
+import { paintedButton, paintedPanel, ribbonTitle, pinToScreen } from '../game/ui';
 import { sfx, playMusic, stopMusic } from '../game/sfx';
 import { load, save } from '../game/save';
 
@@ -177,6 +177,7 @@ export class LevelScene extends Phaser.Scene {
     const banner = this.add.container(viewW(this) / 2, GAME_H * 0.3).setScrollFactor(0).setDepth(100);
     banner.add(ribbonTitle(this, 0, 0, this.def.name, 42, 640));
     banner.add(this.add.text(0, 92, this.def.goal, titleStyle(32)).setOrigin(0.5));
+    pinToScreen(banner);
     this.tweens.add({ targets: banner, alpha: 0, delay: 2200, duration: 600, onComplete: () => banner.destroy() });
   }
 
@@ -1152,11 +1153,17 @@ export class LevelScene extends Phaser.Scene {
     panel.add(this.add.text(0, -30, `★ ${this.starsHere} ${plural(this.starsHere, 'звёздочка', 'звёздочки', 'звёздочек')}`, titleStyle(36, '#ffc93a', '#8a5a00')).setOrigin(0.5));
     const crystals = load().crystals.filter(Boolean).length;
     panel.add(this.add.text(0, 25, `Волшебных ключиков: ${crystals} из 5`, titleStyle(30, '#49c9e8', '#1d4e6b')).setOrigin(0.5));
+    let leaving = false;
     const go = () => {
+      if (leaving) return; // tap and key press must not both fire
+      leaving = true;
       cam.fadeOut(300);
       this.time.delayedCall(320, () => this.scene.start('Map'));
     };
     panel.add(paintedButton(this, 0, 115, 'Дальше ▶', 38, go));
+    // children must not scroll with the camera either, otherwise the button's tap area drifts away
+    // from where it is drawn (on the phone "Дальше" worked only near the start of a level)
+    pinToScreen(panel);
     panel.setScale(0.2).setAlpha(0);
     this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 450, delay: 900, ease: 'Back.easeOut' });
 
